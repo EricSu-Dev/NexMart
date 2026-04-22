@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.PointsMallItemMapper">
+
+    <select id="selectItemsWithCoupon" resultType="com.nex.nexmart.model.vo.checkinPoint.PointsMallItemVO">
+        SELECT
+        p.id, p.points_cost,  p.status, p.created_at,
+        c.id        AS coupon_id,
+        c.name      AS coupon_name,
+        c.coupon_type,
+        c.discount_type,
+        c.remained,
+        c.receive_end,
+        c.per_limit,
+        c.discount_amount,
+        c.discount_rate,
+        c.valid_days,
+        c.total
+        FROM points_mall_item p
+        LEFT JOIN coupon c ON p.coupon_id = c.id
+        <where>
+            <if test="keyword != null and keyword != ''">
+                AND c.name LIKE CONCAT('%', #{keyword}, '%')
+            </if>
+            <if test="discountType != null">
+                AND c.discount_type = #{discountType}
+            </if>
+            <if test="status != null">
+                p.status = #{status}
+            </if>
+        </where>
+        ORDER BY p.created_at DESC
+    </select>
+</mapper>

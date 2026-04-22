@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.base.CouponMapper">
+
+    <resultMap id="BaseResultMap" type="com.nex.nexmart.model.entity.coupon.Coupon">
+            <id property="id" column="id" />
+            <result property="name" column="name" />
+            <result property="couponType" column="coupon_type" />
+            <result property="discountType" column="discount_type" />
+            <result property="minAmount" column="min_amount" />
+            <result property="discountAmount" column="discount_amount" />
+            <result property="discountRate" column="discount_rate" />
+            <result property="scope" column="scope" />
+            <result property="scopeId" column="scope_id" />
+            <result property="total" column="total" />
+            <result property="remained" column="remained" />
+            <result property="perLimit" column="per_limit" />
+            <result property="receiveStart" column="receive_start" />
+            <result property="receiveEnd" column="receive_end" />
+            <result property="validDays" column="valid_days" />
+            <result property="status" column="status" />
+            <result property="createdAt" column="created_at" />
+            <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,name,coupon_type,discount_type,min_amount,discount_amount,
+        discount_rate,scope,scope_id,total,remained,
+        per_limit,receive_start,receive_end,valid_days,status,
+        created_at,updated_at
+    </sql>
+</mapper>

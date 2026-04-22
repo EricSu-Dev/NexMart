@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.ProductFavoriteMapper">
+
+    <select id="selectFavoritePage" resultType="com.nex.nexmart.model.vo.product.FavoriteProductVO">
+        SELECT
+            f.id,
+            f.product_id,
+            p.name,
+            p.cover_url,
+            p.price,
+            p.stock,
+            f.created_at,
+            p.category_id
+        FROM product_favorite f
+                 JOIN product p ON f.product_id = p.id
+        WHERE f.user_id = #{userId}
+        <if test="keyword != null and keyword != ''">
+            AND p.name LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+        <if test="categoryId != null">
+            AND p.category_id = #{categoryId}
+        </if>
+        ORDER BY f.created_at DESC
+    </select>
+
+</mapper>

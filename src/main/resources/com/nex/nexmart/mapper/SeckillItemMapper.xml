@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.nex.nexmart.mapper.SeckillItemMapper">
+
+    <select id="productList" resultType="com.nex.nexmart.model.vo.seckill.SeckillProductItemVO">
+        SELECT si.id,
+        si.item_type,
+        si.product_id,
+        si.seckill_price,
+        si.seckill_stock,
+        si.sold_count,
+        si.per_limit,
+        si.status,
+        p.name      AS product_name,
+        p.cover_url AS product_image,
+        p.price     AS original_price,
+        sa.name     AS activity_name,
+        COALESCE(ps.spec_name, '无规格') AS spec_name
+        FROM seckill_item si
+        LEFT JOIN product p ON si.product_id = p.id AND si.item_type = 1
+        LEFT JOIN seckill_activity sa ON si.activity_id = sa.id
+        LEFT JOIN product_spec ps ON si.product_spec_id = ps.id
+        WHERE si.item_type = 1
+        <if test="onlyUnbound == true">
+            AND si.activity_id IS NULL
+        </if>
+        <if test="activityId != null">
+            AND si.activity_id = #{activityId}
+        </if>
+        ORDER BY si.created_at DESC
+    </select>
+
+    <select id="couponList" resultType="com.nex.nexmart.model.vo.seckill.SeckillCouponItemVO">
+        SELECT si.id,
+        si.item_type,
+        si.coupon_id,
+        si.per_limit,
+        si.status,
+        c.name            AS coupon_name,
+        c.discount_type   AS coupon_discount_type,
+        c.discount_amount AS coupon_discount_amount,
+        c.discount_rate   AS coupon_discount_rate,
+        c.remained        AS coupon_remained,
+        c.total           AS coupon_total,
+        c.per_limit       AS coupon_per_limit,
+        c.receive_start   AS coupon_receive_start,
+        c.receive_end     AS coupon_receive_end,
+        sa.name           AS activity_name
+        FROM seckill_item si
+        LEFT JOIN coupon c ON si.coupon_id = c.id AND si.item_type = 2
+        LEFT JOIN seckill_activity sa ON si.activity_id = sa.id
+        WHERE si.item_type = 2
+        <if test="onlyUnbound == true">
+            AND si.activity_id IS NULL
+        </if>
+        <if test="activityId != null">
+            AND si.activity_id = #{activityId}
+        </if>
+        ORDER BY si.created_at DESC
+    </select>
+
+    <select id="productListByActivity" resultType="com.nex.nexmart.model.vo.seckill.SeckillProductItemVO">
+        SELECT si.id,
+               si.item_type,
+               si.product_id,
+               si.seckill_price,
+               si.seckill_stock,
+               si.sold_count,
+               si.per_limit,
+               si.status,
+               p.name      AS product_name,
+               p.cover_url AS product_image,
+               p.price     AS original_price,
+               COALESCE(ps.spec_name, '默认') AS spec_name
+        FROM seckill_item si
+                 LEFT JOIN product p ON si.product_id = p.id
+                 LEFT JOIN product_spec ps ON si.product_spec_id = ps.id
+        WHERE si.activity_id = #{activityId}
+          AND si.item_type = 1
+          AND si.status = 1
+        ORDER BY si.created_at DESC
+    </select>
+
+    <select id="couponListByActivity" resultType="com.nex.nexmart.model.vo.seckill.SeckillCouponItemVO">
+        SELECT si.id,
+               si.item_type,
+               si.coupon_id,
+               si.per_limit,
+               si.status,
+               -- 券信息
+               c.name            AS coupon_name,
+               c.discount_type   AS coupon_discount_type,
+               c.discount_amount AS coupon_discount_amount,
+               c.discount_rate   AS coupon_discount_rate,
+               c.remained        AS coupon_remained,
+               c.total           AS coupon_total,
+               c.per_limit       AS coupon_per_limit,
+               c.receive_start   AS coupon_receive_start,
+                c.receive_end     AS coupon_receive_end
+        FROM seckill_item si
+                 LEFT JOIN coupon c ON si.coupon_id = c.id
+        WHERE si.activity_id = #{activityId}
+          AND si.item_type = 2
+          AND si.status = 1
+        ORDER BY si.created_at DESC
+    </select>
+
+</mapper>

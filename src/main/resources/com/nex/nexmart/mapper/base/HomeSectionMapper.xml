@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.base.HomeSectionMapper">
+
+    <resultMap id="BaseResultMap" type="com.nex.nexmart.model.entity.home.HomeSection">
+            <id property="id" column="id" />
+            <result property="sectionType" column="section_type" />
+            <result property="autoMode" column="auto_mode" />
+            <result property="autoLimit" column="auto_limit" />
+            <result property="status" column="status" />
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,section_type,auto_mode,auto_limit,status
+    </sql>
+</mapper>

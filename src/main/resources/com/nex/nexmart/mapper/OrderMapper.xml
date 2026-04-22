@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.OrderMapper">
+
+    <select id="getDailyOrderStats" resultType="com.nex.nexmart.model.vo.dashboard.DailyOrderStatsVO">
+        SELECT DATE(created_at) as date, COUNT(*) as orderCount
+        FROM `order`
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+    </select>
+
+    <select id="getDailyRevenueStats" resultType="com.nex.nexmart.model.vo.dashboard.DailyRevenueStatsVO">
+        SELECT DATE(created_at) as date, SUM(final_amount) as revenue
+        FROM `order`
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL #{days} DAY)and status = 4
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+    </select>
+
+    <select id="countByUserAndSeckillItem" resultType="long">
+        SELECT COUNT(*)
+        FROM `order`
+        WHERE user_id = #{userId}
+        AND seckill_item_id = #{seckillItemId}
+        AND status != 0  <!-- 0=已取消-->
+    </select>
+</mapper>

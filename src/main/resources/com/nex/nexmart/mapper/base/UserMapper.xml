@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.base.UserMapper">
+
+    <resultMap id="BaseResultMap" type="com.nex.nexmart.model.entity.User">
+            <id property="id" column="id" />
+            <result property="username" column="username" />
+            <result property="password" column="password" />
+            <result property="email" column="email" />
+            <result property="phone" column="phone" />
+            <result property="avatar_url" column="avatar_url" />
+            <result property="role" column="role" />
+            <result property="status" column="status" />
+            <result property="created_at" column="created_at" />
+            <result property="updated_at" column="updated_at" />
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,username,password,email,phone,avatar_url,
+        role,status,created_at,updated_at
+    </sql>
+</mapper>

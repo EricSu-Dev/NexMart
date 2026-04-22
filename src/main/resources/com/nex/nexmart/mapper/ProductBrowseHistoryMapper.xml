@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.ProductBrowseHistoryMapper">
+
+    <insert id="insertOrUpdate">
+        INSERT INTO product_browse_history (user_id, product_id, viewed_at)
+        VALUES (#{userId}, #{productId}, NOW())
+        ON DUPLICATE KEY UPDATE viewed_at = NOW()
+    </insert>
+
+    <select id="selectHistoryPage" resultType="com.nex.nexmart.model.vo.product.BrowseHistoryVO">
+        SELECT
+        h.id,
+        h.product_id,
+        p.name,
+        p.cover_url,
+        p.price,
+        p.stock,
+        h.viewed_at,
+        p.category_id
+        FROM product_browse_history h
+        JOIN product p ON h.product_id = p.id
+        WHERE h.user_id = #{userId}
+        <if test="keyword != null and keyword != ''">
+            AND p.name LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+        <if test="categoryId != null">
+            AND p.category_id = #{categoryId}
+        </if>
+        ORDER BY h.viewed_at DESC
+    </select>
+
+    <delete id="deleteOldRecords">
+        DELETE FROM product_browse_history
+        WHERE user_id = #{userId}
+          AND viewed_at &lt; (
+            SELECT viewed_at FROM (
+                                      SELECT viewed_at
+                                      FROM product_browse_history
+                                      WHERE user_id = #{userId}
+                                      ORDER BY viewed_at DESC
+                                      LIMIT 1 OFFSET #{max}
+                                  ) t
+        )
+    </delete>
+
+</mapper>

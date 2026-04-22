@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.nex.nexmart.mapper.base.ReviewMapper">
+
+    <resultMap id="BaseResultMap" type="com.nex.nexmart.model.entity.review.Review">
+            <id property="id" column="id" />
+            <result property="userId" column="user_id" />
+            <result property="orderItemId" column="order_item_id" />
+            <result property="productId" column="product_id" />
+            <result property="rating" column="rating" />
+            <result property="content" column="content" />
+            <result property="mediaUrls" column="media_urls" />
+            <result property="createdAt" column="created_at" />
+            <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,user_id,order_item_id,product_id,rating,content,
+        media_urls,created_at,updated_at
+    </sql>
+</mapper>
