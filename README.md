@@ -45,6 +45,7 @@
 ## ⭐ 核心技术亮点 | Highlights
 
 **① RabbitMQ 死信队列实现订单超时取消**
+
 订单创建时消息设置 30 分钟 TTL，超时后路由至死信队列触发取消逻辑，回滚库存及优惠券，替代定时任务轮询方案。
 
 Order creation publishes a message with a 30-minute TTL; on expiry it routes to a dead-letter queue, triggers cancellation, and rolls back stock and coupons — replacing polling-based schedulers.
@@ -52,6 +53,7 @@ Order creation publishes a message with a 30-minute TTL; on expiry it routes to 
 ---
 
 **② Redis 多数据结构综合应用**
+
 String 缓存首页商品/轮播图/分类数据、秒杀活动数据、秒杀项数据并预热秒杀库存；Hash 缓存秒杀限购用户已购数；ZSet 存储搜索热词；Bitmap 记录每日签到状态及连续签到天数；结合 Lua 脚本保证秒杀库存扣减的原子性。
 
 String caches homepage products/banners/categories, seckill activity/item data, and pre-loaded seckill stock; Hash caches per-user purchase counts for seckill limits; ZSet stores search hot keywords; Bitmap tracks daily check-in status and streaks; Lua scripts ensure atomic stock deduction.
@@ -59,6 +61,7 @@ String caches homepage products/banners/categories, seckill activity/item data, 
 ---
 
 **③ 秒杀高并发设计**
+
 绑定活动时从商品实际库存预扣秒杀数量，从源头防止超卖；活动期间预热库存及用户已购数至 Redis，Lua 脚本原子校验并扣减；扣减成功后异步投递 MQ 落库。同时针对秒杀活动列表、秒杀商品、秒杀订单券处理了缓存穿透（空值缓存）、缓存击穿（自实现 Redis 互斥锁：SETNX 加锁 + Lua 脚本原子释放，防止锁过期后误删其他线程持有的锁）、缓存雪崩（随机过期时间）问题。
 
 Stock for seckill items is pre-deducted from actual inventory at activity binding time; during the event, stock and per-user purchase counts are pre-loaded into Redis and atomically validated/deducted via Lua script; successful deduction triggers async MQ order creation. Cache penetration (null caching), cache breakdown (self-implemented Redis mutex: SETNX lock + Lua atomic release to prevent accidental deletion of other threads' locks), and cache avalanche (randomized TTL) are all addressed for seckill activity lists, items, and coupons.
@@ -66,6 +69,7 @@ Stock for seckill items is pre-deducted from actual inventory at activity bindin
 ---
 
 **④ 多维优惠体系设计**
+
 支持秒杀、促销活动（满减/折扣）、商品优惠券、订单优惠券四种优惠方式，含明确叠加互斥规则（促销活动与订单券互斥，秒杀与其他优惠完全独立）。结算页支持实时价格预览；下单时快照优惠信息至订单表；支付成功、申请退款、待发货取消订单、取消退款申请时通过 WebSocket 实时通知管理端；退款金额原路退回支付宝，并精确回滚对应券及库存。
 
 Four discount types — flash sale, promotions, product coupons, and order coupons — with explicit stacking rules. Real-time price preview on the checkout page; discount details snapshotted into the order on placement; WebSocket notifies the admin in real time on payment, refund request, pre-shipment cancellation, and refund cancellation; refunds are returned via Alipay and precisely roll back coupons and stock.
@@ -73,6 +77,7 @@ Four discount types — flash sale, promotions, product coupons, and order coupo
 ---
 
 **⑤ WebSocket 实时客服系统**
+
 基于 Spring WebSocket 实现用户与客服的实时会话，支持文本、图片、商品卡片、订单卡片消息类型，含已读回执与未读消息气泡提醒。
 
 Real-time chat between users and support agents via Spring WebSocket, supporting text, images, product cards, and order cards, with read receipts and unread badge notifications.
@@ -80,6 +85,7 @@ Real-time chat between users and support agents via Spring WebSocket, supporting
 ---
 
 **⑥ Spring AI + DeepSeek 流式 AI 客服与搜索兜底**
+
 集成 Spring AI（OpenAI-compatible 接口）接入 DeepSeek，支持意图识别、动态查询数据库、SSE 流式输出，多轮上下文存储于 Redis，历史记录持久化至 MySQL；搜索无结果时自动降级为 AI 智能推荐。
 
 Integrated Spring AI (OpenAI-compatible) with DeepSeek for intent recognition, dynamic DB queries, and SSE streaming output; multi-turn context in Redis, history persisted in MySQL. Falls back to AI-powered recommendations when search returns no results.
