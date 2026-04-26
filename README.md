@@ -212,10 +212,15 @@ graph TD
 
 ### 1. 克隆项目 | Clone
 
+GitHub:
 ```bash
-git clone https://github.com/EricSu-Dev/nexmart.git
+git clone https://github.com/EricSu-Dev/NexMart.git
 ```
 
+Gitee:
+```bash
+git clone https://gitee.com/EricSu-Dev/NexMart.git
+```
 ### 2. 初始化数据库 | Database Setup
 
 创建数据库并执行初始化脚本：
