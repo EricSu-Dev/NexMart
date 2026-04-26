@@ -5,7 +5,6 @@
 > A front-end/back-end separated monolithic e-commerce system built with Spring Boot 3 + Vue 3, covering the complete shopping workflow, promotion engine, flash sales, check-in rewards, real-time customer service, AI customer service, and more.
 
 🔗 用户端仓库：GitHub [NexMart-user](https://github.com/EricSu-Dev/NexMart-user) | Gitee [NexMart-user](https://gitee.com/EricSu-Dev/NexMart-user)
-
 🔗 管理端仓库：GitHub [NexMart-admin](https://github.com/EricSu-Dev/NexMart-admin) | Gitee [NexMart-admin](https://gitee.com/EricSu-Dev/NexMart-admin)
 ---
 
