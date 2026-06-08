@@ -2,6 +2,8 @@ package com.nex.nexmart.rabbit.mq.message;
 
 import lombok.Data;
 
+import java.io.Serializable;
+
 @Data
 public class SeckillProductOrderMessage {
 	private Long userId;

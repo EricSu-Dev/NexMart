@@ -15,9 +15,11 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 import com.rabbitmq.client.Channel;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Map;
 
 import org.springframework.messaging.handler.annotation.Header;
@@ -31,6 +33,9 @@ public class OrderMQConsumer {
 	private final CsWebSocketSessionManager sessionManager;
 	private final SeckillOrderServiceImpl seckillOrderService;
 	private final RabbitAdmin rabbitAdmin;
+
+	private static final DefaultRedisScript<Long> SECKILL_ROLLBACK_LUA_SCRIPT =
+			new DefaultRedisScript<>(RedisSeckillConstants.SECKILL_ROLLBACK_LUA, Long.class);
 	@PostConstruct
 	public void testRabbit() {
 		rabbitAdmin.initialize();
@@ -72,11 +77,14 @@ public class OrderMQConsumer {
 			channel.basicAck(deliveryTag, false);
 		} catch (Exception e) {
 			log.error("[SeckillMQ] 秒杀券下单失败 userId={} seckillItemId={}", userId, seckillItemId, e);
-			// 回滚Redis
+			// 回滚Redis（Lua保证原子性）
 			String stockKey = RedisSeckillConstants.SECKILL_COUPON_STOCK + seckillItemId;
 			String userKey = RedisSeckillConstants.SECKILL_COUPON_USERS + seckillItemId;
-			redisTemplate.opsForValue().increment(stockKey);
-			redisTemplate.opsForHash().increment(userKey, String.valueOf(userId), -1);
+			redisTemplate.execute(
+					SECKILL_ROLLBACK_LUA_SCRIPT,
+					Arrays.asList(stockKey, userKey),
+					String.valueOf(userId)
+			);
 			sessionManager.sendToUser(userId, JSON.toJSONString(Map.of(
 					"type", "SECKILL_RESULT",
 					"success", false,
@@ -102,11 +110,14 @@ public class OrderMQConsumer {
 			channel.basicAck(deliveryTag, false);
 		} catch (Exception e) {
 			log.error("[SeckillMQ] 秒杀商品下单失败 userId={} seckillItemId={}", userId, seckillItemId, e);
-			// 回滚Redis
+			// 回滚Redis（Lua保证原子性）
 			String stockKey = RedisSeckillConstants.SECKILL_PRODUCT_STOCK + seckillItemId;
 			String userKey = RedisSeckillConstants.SECKILL_PRODUCT_USERS + seckillItemId;
-			redisTemplate.opsForValue().increment(stockKey);
-			redisTemplate.opsForHash().increment(userKey, String.valueOf(userId), -1);
+			redisTemplate.execute(
+					SECKILL_ROLLBACK_LUA_SCRIPT,
+					Arrays.asList(stockKey, userKey),
+					String.valueOf(userId)
+			);
 			sessionManager.sendToUser(userId, JSON.toJSONString(Map.of(
 					"type", "SECKILL_RESULT",
 					"success", false,

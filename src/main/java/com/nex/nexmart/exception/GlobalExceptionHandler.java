@@ -22,7 +22,8 @@ public class GlobalExceptionHandler {
     /**
      * 业务异常（主动抛出）
      */
-    @ExceptionHandler(BusinessException.class)
+    @ExceptionHandler(BusinessException.class)//指定这个方法处理哪种异常
+    //加了@ResponseBody才会把Result<Void>序列化成JSON返回,用@RestControllerAdvice就不用加了
     public Result<Void> handleBusinessException(BusinessException e) {
         log.warn("业务异常: {}", e.getMessage());
 		// 返回错误码和错误信息

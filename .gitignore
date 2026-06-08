@@ -3,7 +3,7 @@ target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-
+memory/
 ### STS ###
 .apt_generated
 .classpath
@@ -45,4 +45,6 @@ logs/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+src/main/resources/application-local.yml
 

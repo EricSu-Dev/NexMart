@@ -235,43 +235,42 @@ CREATE DATABASE nexmart_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 ### 3. 修改配置 | Configuration
 
-修改 `src/main/resources/application.yml`，填入你自己的配置：
+本项目采用双配置文件方式隔离敏感信息：
+
+`application.yml`：非敏感配置，已包含在仓库中
+
+`application-local.yml`：敏感配置，不提交到 Git，需本地自行创建
+
+在 `src/main/resources/` 目录下创建 `application-local.yml`，填入你自己的配置：
 
 ```yaml
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/nexmart_db
+    url: jdbc:mysql://xxx.xxx.xxx.xxx:3306/nexmart_db?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true # xxx部分替换成你的mysql地址
     username: # 你的 MySQL 用户名
     password: # 你的 MySQL 密码
+
   data:
     redis:
-      host: localhost
-      port: 6379
-      database: 0
+      host: # 你的 Redis 地址
+
   rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
+    host: # 你的 RabbitMQ 地址
+
   ai:
     openai:
       api-key: # 你的 DeepSeek API Key
-      base-url: https://api.deepseek.com
 
 alipay:
   app-id: # 你的沙箱 AppId
-  private-key: # 你的应用私钥
-  alipay-public-key: # 支付宝公钥
+  private-key: #你的应用私钥（单行）
+  alipay-public-key: #支付宝公钥（单行）
   notify-url: # 支付宝异步回调地址（需公网可访问，本地开发推荐使用 ngrok 内网穿透）
-  return-url: http://localhost:8087/api/user/payment/return
 
 aliyun:
   oss:
-    endpoint: # 你的 OSS endpoint（如 oss-cn-beijing.aliyuncs.com）
     access-key-id: # 你的 AccessKeyId
     access-key-secret: # 你的 AccessKeySecret
-    bucket-name: # 你的 Bucket 名称
-    url-prefix: # OSS 文件访问域名前缀
 ```
 
 > ⚠️ **支付宝回调说明**：`notify-url` 必须是公网可访问的地址，本地开发可使用 [ngrok](https://ngrok.com) 做内网穿透：

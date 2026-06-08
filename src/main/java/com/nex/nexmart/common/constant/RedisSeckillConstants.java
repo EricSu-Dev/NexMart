@@ -40,4 +40,10 @@ public class RedisSeckillConstants {
 			"if redis.call('get', KEYS[1]) == ARGV[1] " +
 					"then return redis.call('del', KEYS[1]) " +
 					"else return 0 end";
+
+	//mq失败回滚脚本
+	public static final String SECKILL_ROLLBACK_LUA =
+			"redis.call('incr', KEYS[1])\n" +
+					"redis.call('hincrby', KEYS[2], ARGV[1], -1)\n" +
+					"return 1";
 }

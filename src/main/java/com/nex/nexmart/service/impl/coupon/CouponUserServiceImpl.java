@@ -14,7 +14,9 @@ import com.nex.nexmart.service.intf.coupon.CouponUserService;
 import com.nex.nexmart.mapper.CouponUserMapper;
 import com.nex.nexmart.util.CouponDescHelper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +30,7 @@ import java.util.stream.Collectors;
 *  2026-04-08 21:10:29
 */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponUser> implements CouponUserService{
 	private  final CouponUserMapper couponUserMapper;
@@ -35,6 +38,8 @@ public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponU
 	private  final CouponDescHelper couponDescHelper;
 	private  final CartItemMapper cartItemMapper;
 	private  final ProductMapper productMapper;
+	private static final int STATUS_UNUSED = 0;
+	private static final int STATUS_EXPIRED = 2;
 	@Override
 	@Transactional
 	public void receiveCoupon(Long couponId, Long userId) {
@@ -82,12 +87,29 @@ public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponU
 	public List<MyCouponVO> getMyCoupons(Long userId, Integer status,Integer couponType) {
 		LocalDateTime now = LocalDateTime.now();
 
-		List<CouponUser> myList = lambdaQuery()
-						.eq(CouponUser::getUserId, userId)
-						.eq(status!=null,CouponUser::getStatus, status)
-						.eq(couponType!=null,CouponUser::getCouponType, couponType)
-						.orderByDesc(CouponUser::getReceivedAt)
-						.list();
+		var query = lambdaQuery()
+				.eq(CouponUser::getUserId, userId)
+				.eq(couponType != null, CouponUser::getCouponType, couponType);
+
+		if (status == null) {
+			query.orderByDesc(CouponUser::getReceivedAt);
+		} else if (status == STATUS_UNUSED) {
+			query.eq(CouponUser::getStatus, STATUS_UNUSED)
+					.gt(CouponUser::getExpireAt, now)
+					.orderByDesc(CouponUser::getReceivedAt);
+		} else if (status == STATUS_EXPIRED) {
+			query.and(wrapper -> wrapper
+							.eq(CouponUser::getStatus, STATUS_EXPIRED)
+							.or()
+							.eq(CouponUser::getStatus, STATUS_UNUSED)
+							.le(CouponUser::getExpireAt, now))
+					.orderByDesc(CouponUser::getReceivedAt);
+		} else {
+			query.eq(CouponUser::getStatus, status)
+					.orderByDesc(CouponUser::getReceivedAt);
+		}
+
+		List<CouponUser> myList = query.list();
 
 		if (myList.isEmpty()) return Collections.emptyList();
 
@@ -115,8 +137,8 @@ public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponU
 
 			// 实时判断过期
 			int realStatus = cu.getStatus();
-			if (realStatus == 0 && cu.getExpireAt().isBefore(now)) {
-				realStatus = 2;
+			if (realStatus == STATUS_UNUSED && !cu.getExpireAt().isAfter(now)) {
+				realStatus = STATUS_EXPIRED;
 			}
 			vo.setStatus(realStatus);
 
@@ -251,6 +273,21 @@ public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponU
 			case 3 -> product.getId().equals(coupon.getScopeId()) && discountTypeUsable;
 			default -> false;
 		};
+	}
+
+	@Scheduled(fixedDelay = 60000)
+	public void markExpiredCoupons() {
+		LocalDateTime now = LocalDateTime.now();
+		int updated = couponUserMapper.update(
+				null,
+				new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<CouponUser>()
+						.eq(CouponUser::getStatus, STATUS_UNUSED)
+						.le(CouponUser::getExpireAt, now)
+						.set(CouponUser::getStatus, STATUS_EXPIRED)
+		);
+		if (updated > 0) {
+			log.info("优惠券过期状态更新完成: {} 张", updated);
+		}
 	}
 
 }

@@ -27,4 +27,16 @@
         AND seckill_item_id = #{seckillItemId}
         AND status != 0  <!-- 0=已取消-->
     </select>
+
+    <select id="countByUserAndSeckillItems" resultType="map">
+        SELECT seckill_item_id, COUNT(*) AS cnt
+        FROM `order`
+        WHERE user_id = #{userId}
+        AND seckill_item_id IN
+        <foreach collection="seckillItemIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        AND status != 0
+        GROUP BY seckill_item_id
+    </select>
 </mapper>

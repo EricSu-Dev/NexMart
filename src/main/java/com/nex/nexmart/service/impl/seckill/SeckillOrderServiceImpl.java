@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.nex.nexmart.rabbit.mq.message.SeckillProductOrderMessage;
 import com.nex.nexmart.common.constant.RabbitMQConstants;
 import com.nex.nexmart.common.constant.RedisSeckillConstants;
+import com.nex.nexmart.config.RabbitMQConfig;
 import com.nex.nexmart.exception.BusinessException;
 import com.nex.nexmart.mapper.CouponUserMapper;
 import com.nex.nexmart.mapper.base.CouponMapper;
@@ -27,7 +28,7 @@ import com.nex.nexmart.service.intf.order.OrderService;
 import com.nex.nexmart.service.intf.product.ProductService;
 import com.nex.nexmart.service.intf.product.ProductSpecService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
@@ -36,10 +37,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Random;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SeckillOrderServiceImpl implements SeckillOrderService {
@@ -52,9 +52,15 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 	private final OrderItemService orderItemService;
 	private final AddressService addressService;
 	private final CouponMapper couponMapper;
-	private final RabbitTemplate rabbitTemplate;
+	private final RabbitMQConfig rabbitMQConfig;
 	private final CouponUserMapper couponUserMapper;
 	private final RedisTemplate<String, String> redisTemplate;
+
+	private static final DefaultRedisScript<Long> SECKILL_LUA_SCRIPT =
+			new DefaultRedisScript<>(RedisSeckillConstants.SECKILL_LUA, Long.class);
+
+	private static final DefaultRedisScript<Long> SECKILL_ROLLBACK_LUA_SCRIPT =
+			new DefaultRedisScript<>(RedisSeckillConstants.SECKILL_ROLLBACK_LUA, Long.class);
 
 	@Override
 	@Transactional
@@ -97,7 +103,7 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 
 		// 5.Lua执行
 		Long result = redisTemplate.execute(
-				new DefaultRedisScript<>(RedisSeckillConstants.SECKILL_LUA, Long.class),
+				SECKILL_LUA_SCRIPT,
 				Arrays.asList(stockKey, userKey),
 				String.valueOf(userId),
 				String.valueOf(coupon.getPerLimit())
@@ -110,22 +116,20 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 			throw new BusinessException("已达限购上限");
 		}
 
-		// 6. 发MQ，异步处理写DB
+		// 6. 发MQ，异步处理写DB（带 Confirm 重试，nack 耗尽时自动 Lua 回滚）
 		SeckillCouponMessage msg = new SeckillCouponMessage();
 		msg.setUserId(userId);
 		msg.setSeckillItemId(seckillItemId);
-		try {
-			rabbitTemplate.convertAndSend(
-					RabbitMQConstants.SECKILL_ORDER_EXCHANGE,
-					RabbitMQConstants.SECKILL_COUPON_ORDER_ROUTING_KEY,
-					msg
-			);
-		}catch (Exception e) {
-			// 只有发MQ失败才在这里回滚Redis
-			redisTemplate.opsForValue().increment(stockKey);
-			redisTemplate.opsForHash().increment(userKey, String.valueOf(userId), -1);
-			throw new BusinessException("系统繁忙，请重试");
-		}
+		rabbitMQConfig.sendSeckillMessage(
+				RabbitMQConstants.SECKILL_ORDER_EXCHANGE,
+				RabbitMQConstants.SECKILL_COUPON_ORDER_ROUTING_KEY,
+				msg,
+				() -> redisTemplate.execute(
+						SECKILL_ROLLBACK_LUA_SCRIPT,
+						Arrays.asList(stockKey, userKey),
+						String.valueOf(userId)
+				)
+		);
 	}
 
 	@Transactional
@@ -133,6 +137,12 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 		SeckillItem item = seckillItemService.getById(seckillItemId);
 		Coupon coupon = couponMapper.selectById(item.getCouponId());
 		LocalDateTime now = LocalDateTime.now();
+
+		// DB层面限购兜底校验
+		long owned = couponUserMapper.countByUserAndCoupon(userId, coupon.getId());
+		if (owned >= coupon.getPerLimit()) {
+			throw new BusinessException("已达限购上限");
+		}
 
 		// 扣DB库存
 		int rows = couponMapper.update(null,
@@ -210,10 +220,10 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 
 		// 6.Lua执行
 		Long result = redisTemplate.execute(
-				new DefaultRedisScript<>(RedisSeckillConstants.SECKILL_LUA, Long.class),
+				SECKILL_LUA_SCRIPT,
 				Arrays.asList(stockKey, userKey),
 				String.valueOf(userId),
-				String.valueOf(item.getPerLimit())  // perLimit从item取
+				String.valueOf(item.getPerLimit())
 		);
 
 		if (result == null || result == -1L) {
@@ -223,24 +233,22 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 			throw new BusinessException("已达限购上限");
 		}
 
-		// 7.发MQ，异步处理写DB
+		// 7. 发MQ，异步处理写DB（带 Confirm 重试，nack 耗尽时自动 Lua 回滚）
 		SeckillProductOrderMessage msg = new SeckillProductOrderMessage();
 		msg.setUserId(userId);
 		msg.setSeckillItemId(dto.getSeckillItemId());
 		msg.setSkuId(item.getProductSpecId());
 		msg.setAddressId(dto.getAddressId());
-		try {
-			rabbitTemplate.convertAndSend(
-					RabbitMQConstants.SECKILL_ORDER_EXCHANGE,
-					RabbitMQConstants.SECKILL_PRODUCT_ORDER_ROUTING_KEY,
-					msg
-			);
-		}catch (Exception e) {
-			// 只有发MQ失败才在这里回滚Redis
-			redisTemplate.opsForValue().increment(stockKey);
-			redisTemplate.opsForHash().increment(userKey, String.valueOf(userId), -1);
-			throw new BusinessException("系统繁忙，请重试");
-		}
+		rabbitMQConfig.sendSeckillMessage(
+				RabbitMQConstants.SECKILL_ORDER_EXCHANGE,
+				RabbitMQConstants.SECKILL_PRODUCT_ORDER_ROUTING_KEY,
+				msg,
+				() -> redisTemplate.execute(
+						SECKILL_ROLLBACK_LUA_SCRIPT,
+						Arrays.asList(stockKey, userKey),
+						String.valueOf(userId)
+				)
+		);
 	}
 
 	@Transactional
@@ -249,6 +257,16 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 		SeckillItem item = seckillItemService.getById(msg.getSeckillItemId());
 		SeckillActivity activity = seckillActivityService.getById(item.getActivityId());
 		Product product = productService.getById(item.getProductId());
+
+		// DB层面限购兜底校验（Redis重启后hash丢失的最后防线）
+		long bought = orderService.lambdaQuery()
+				.eq(Order::getUserId, userId)
+				.eq(Order::getSeckillItemId, msg.getSeckillItemId())
+				.ne(Order::getStatus, 0)
+				.count();
+		if (bought >= item.getPerLimit()) {
+			throw new BusinessException("已达限购上限");
+		}
 
 		// 1. 扣秒杀库存
 		boolean seckillStockSuccess = seckillItemService.lambdaUpdate()
@@ -310,13 +328,7 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 		orderItem.setCouponName(null);
 		orderItemService.save(orderItem);
 
-		// 6. 发超时取消订单的MQ
-		Map<String, Object> timeoutMsg = new HashMap<>();
-		timeoutMsg.put("orderId", order.getId());
-		rabbitTemplate.convertAndSend(
-				RabbitMQConstants.ORDER_DELAY_EXCHANGE,
-				RabbitMQConstants.ORDER_DELAY_ROUTING_KEY,
-				timeoutMsg
-		);
+		// 6. 发超时取消订单的MQ（带 Confirm 重试，防止消息丢失）
+		rabbitMQConfig.sendOrderTimeoutMessage(order.getId());
 	}
 }

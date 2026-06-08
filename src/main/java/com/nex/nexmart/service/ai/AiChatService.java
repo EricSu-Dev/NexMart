@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -38,6 +39,7 @@ public class AiChatService {
 	private final AiContextService aiContextService;
 	private final AiSessionMapper aiSessionMapper;
 	private final AiMessageMapper aiMessageMapper;
+	private final ThreadPoolExecutor nexmartExecutor;
 
 	public static final String AI_CHAT_HISTORY_Prefix = "NexMart:ai:history:";
 	public static final long AI_CHAT_TTL = 60; // 分钟
@@ -100,42 +102,68 @@ public class AiChatService {
 				.stream() //开启流式模式
 				.content()//只提取文本内容流
 				.concatWith(Flux.just("[DONE]")) // 新增：流结束后追加一个 [DONE] 信号
+				.onErrorResume(e -> {
+					log.error("AI stream failed, userId={}", userId, e);
+					messages.add(new AssistantMessage(
+							fullReply.isEmpty() ? "[系统提示] AI 服务暂时不可用，请稍后重试" : fullReply.toString()));
+					saveHistory(key, messages);
+					CompletableFuture.runAsync(() -> persistToMySQL(userId, message, fullReply.toString()), nexmartExecutor);
+					return Flux.just(
+							fullReply.isEmpty() ? "[系统提示] AI 服务暂时不可用，请稍后重试" : "",
+							"[DONE]");
+				})
 				.doOnNext(fullReply::append)//实时拼接内容
+				.doOnCancel(() -> {
+					if (fullReply.isEmpty()) return;
+					messages.add(new AssistantMessage(fullReply.toString()));
+					saveHistory(key, messages);
+					log.warn("AI stream cancelled by client, userId={}, partialReply={}", userId, fullReply);
+					CompletableFuture.runAsync(() -> persistToMySQL(userId, message, fullReply.toString()), nexmartExecutor);
+				})
+				.doOnError(e -> {
+					messages.add(new AssistantMessage(
+							fullReply.isEmpty() ? "[系统提示] AI 回复中断，请重试" : fullReply.toString()));
+					saveHistory(key, messages);
+					log.error("AI stream error userId={}, partialReply={}", userId, fullReply, e);
+					CompletableFuture.runAsync(() -> persistToMySQL(userId, message, fullReply.toString()), nexmartExecutor);
+				})
 				.doOnComplete(() -> {
 					// 4. 流结束后保存完整历史
 					messages.add(new AssistantMessage(fullReply.toString()));
 					//保存原始 message 而不是拼了 context 的版本，这样历史记录不会越来越臃肿
 					saveHistory(key, messages);
 					// 新增：异步存MySQL
-					CompletableFuture.runAsync(() -> {
-						try {
-							AiSession session = aiSessionMapper.selectOne(
-									new LambdaQueryWrapper<AiSession>()
-											.eq(AiSession::getUserId, userId)
-							);
-							if (session == null) {
-								session = new AiSession();
-								session.setUserId(userId);
-								aiSessionMapper.insert(session);
-							}
-							Long sessionId = session.getId();
-
-							AiMessage userMsg = new AiMessage();
-							userMsg.setSessionId(sessionId);
-							userMsg.setRole(1);
-							userMsg.setContent(message);
-							aiMessageMapper.insert(userMsg);
-
-							AiMessage aiMsg = new AiMessage();
-							aiMsg.setSessionId(sessionId);
-							aiMsg.setRole(2);
-							aiMsg.setContent(fullReply.toString());
-							aiMessageMapper.insert(aiMsg);
-						} catch (Exception e) {
-							log.error("AI对话记录存储失败 userId={}, error={}", userId, e.getMessage(), e);
-						}
-					});
+					CompletableFuture.runAsync(() -> persistToMySQL(userId, message, fullReply.toString()), nexmartExecutor);
 				});
+	}
+
+	private void persistToMySQL(Long userId, String message, String replyContent) {
+		try {
+			AiSession session = aiSessionMapper.selectOne(
+					new LambdaQueryWrapper<AiSession>()
+							.eq(AiSession::getUserId, userId)
+			);
+			if (session == null) {
+				session = new AiSession();
+				session.setUserId(userId);
+				aiSessionMapper.insert(session);
+			}
+			Long sessionId = session.getId();
+
+			AiMessage userMsg = new AiMessage();
+			userMsg.setSessionId(sessionId);
+			userMsg.setRole(1);
+			userMsg.setContent(message);
+			aiMessageMapper.insert(userMsg);
+
+			AiMessage aiMsg = new AiMessage();
+			aiMsg.setSessionId(sessionId);
+			aiMsg.setRole(2);
+			aiMsg.setContent(replyContent);
+			aiMessageMapper.insert(aiMsg);
+		} catch (Exception ex) {
+			log.error("AI对话记录存储失败 userId={}, error={}", userId, ex.getMessage(), ex);
+		}
 	}
 
 	private IntentResult recognizeIntent(String message) {

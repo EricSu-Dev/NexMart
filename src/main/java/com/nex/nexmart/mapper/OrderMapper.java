@@ -7,6 +7,7 @@ import com.nex.nexmart.model.vo.dashboard.DailyRevenueStatsVO;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
+import java.util.Map;
 
 /**
 * @author Eric
@@ -20,6 +21,9 @@ public interface OrderMapper extends BaseMapper<Order> {
 	List<DailyRevenueStatsVO> getDailyRevenueStats(@Param("days") int days);
 
 	long countByUserAndSeckillItem(@Param("userId") Long userId, @Param("seckillItemId") Long seckillItemId);
+
+	/** 批量查询用户在多个秒杀商品上的已购买数，每行两列：seckill_item_id, cnt */
+	List<Map<String, Object>> countByUserAndSeckillItems(@Param("userId") Long userId, @Param("seckillItemIds") List<Long> seckillItemIds);
 }
 
 

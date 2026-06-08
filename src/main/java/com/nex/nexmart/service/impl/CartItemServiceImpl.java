@@ -33,28 +33,6 @@ public class CartItemServiceImpl extends ServiceImpl<CartItemMapper, CartItem> i
 	private final ProductSpecService productSpecService;
 	private final PromotionService promotionService;
 
-
-//	数据库 cart_item 表
-//        │
-//		        │ lambdaQuery
-//        ▼
-//	List<CartItem>          ← 只有 productId，没有商品详情
-//        │
-//		        │ 提取所有 productId
-//        ▼
-//	List<Long> productIds
-//        │
-//		        │ IN 查询一次商品表（避免 N+1）
-//			▼
-//	Map<Long, Product>      ← id → Product 的快速查找表
-//        │
-//		        │ 组装
-//        ▼
-//	List<CartVO>            ← CartItem 字段 + Product 字段 + 计算小计
-//        │
-//		        │ 返回给前端
-//        ▼
-//	购物车列表页面
 	@Override
 	public List<CartVO> listCart(Long userId) {
 		List<CartItem> cartItems = lambdaQuery()

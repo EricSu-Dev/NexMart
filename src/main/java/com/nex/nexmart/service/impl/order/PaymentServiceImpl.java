@@ -34,6 +34,7 @@ import com.nex.nexmart.websocket.WebSocketSessionManager;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,75 +57,66 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 	private final WebSocketSessionManager sessionManager;
 	private final CouponUserService couponUserService;
 
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public String pay(Long orderId, Long userId) {
-        // 1. 查订单，校验归属和状态
-        Order order = orderMapper.selectById(orderId);
-        if (order == null || !order.getUserId().equals(userId)) {
-            throw new BusinessException("订单不存在");
-        }
-        if (order.getStatus() != 1) {
-            throw new BusinessException("订单状态异常，无法支付");
-        }
-        if (order.getPayStatus() != null && order.getPayStatus() == 1) {
-            throw new BusinessException("订单已支付");
-        }
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public String pay(Long orderId, Long userId) {
+		// 第一阶段：完成 DB 操作
+		Order order = orderMapper.selectById(orderId);
+		if (order == null || !order.getUserId().equals(userId)) {
+			throw new BusinessException("订单不存在");
+		}
+		if (order.getStatus() != 1) {
+			throw new BusinessException("订单状态异常，无法支付");
+		}
+		if (order.getPayStatus() != null && order.getPayStatus() == 1) {
+			throw new BusinessException("订单已支付");
+		}
 
-        // 2. 创建或查找支付记录（防止重复创建）
-        Payment payment = lambdaQuery()
-                .eq(Payment::getOrderId, orderId)
-                .one();
+		Payment payment = lambdaQuery().eq(Payment::getOrderId, orderId).one();
+		if (payment == null) {
+			payment = new Payment();
+			payment.setOrderId(order.getId());
+			payment.setOrderNo(order.getOrderNo());
+			payment.setAmount(order.getFinalAmount());
+			payment.setPayType(1);
+			payment.setStatus(0);
+			//防止用户快速点两次"支付"按钮创建两条支付记录
+			try {
+				save(payment);
+			} catch (DuplicateKeyException e) {
+				payment = lambdaQuery().eq(Payment::getOrderId, orderId).one();
+			}
+			//支付宝要求 outTradeNo 全局唯一,如果用户第一次发起支付后取消，再重新支付同一笔订单，复用原始订单号就会报"订单号重复"
+			//所以 outTradeNo 要加后缀
+			String outTradeNo = order.getOrderNo() + "_" + payment.getId();
+			lambdaUpdate()
+					.eq(Payment::getId, payment.getId())
+					.set(Payment::getOrderNo, outTradeNo)
+					.update();
+			payment.setOrderNo(outTradeNo); // 同步内存对象
+		}
+		// 第二阶段：网络 IO
+		AlipayTradePagePayRequest request = new AlipayTradePagePayRequest();
+		request.setNotifyUrl(alipayProperties.getNotifyUrl());
+		request.setReturnUrl(alipayProperties.getReturnUrl());
 
-        if (payment == null) {
-            payment = new Payment();
-            payment.setOrderId(order.getId());
-            payment.setOrderNo(order.getOrderNo());
-            payment.setAmount(order.getFinalAmount());
-            payment.setPayType(1);
-            payment.setStatus(0);
-            save(payment);
-	        // 用完整的 outTradeNo 更新 order_no
-	        //为什么加后缀? 因为支付宝不允许重复订单号，用户可能多次发起支付,所以加上后缀
-	        String outTradeNo = order.getOrderNo() + "_" + payment.getId();
-	        lambdaUpdate()
-			        .eq(Payment::getId, payment.getId())
-			        .set(Payment::getOrderNo, outTradeNo)
-			        .update();
-        }
+		AlipayTradePagePayModel model = new AlipayTradePagePayModel();
+		model.setOutTradeNo(payment.getOrderNo());
+		//BigDecimal 转字符串必须用 toPlainString(),防止数值较大或精度特殊时可能输出科学计数法
+		model.setTotalAmount(payment.getAmount().toPlainString());
+		model.setSubject("NexMart Order - " + order.getOrderNo());
+		model.setProductCode("FAST_INSTANT_TRADE_PAY");
+		model.setQrPayMode("2");
+		model.setIntegrationType("PCWEB");
+		request.setBizModel(model);
 
-        // 3. 构建电脑网站支付请求模型（官方推荐方式，更稳健）
-        AlipayTradePagePayRequest request = new AlipayTradePagePayRequest();
-        request.setNotifyUrl(alipayProperties.getNotifyUrl());
-        request.setReturnUrl(alipayProperties.getReturnUrl());
-
-        // 业务参数准备
-	    String outTradeNo = payment.getOrderNo();
-        String subject = "NexMart Order - " + order.getOrderNo();
-        String totalAmount = order.getFinalAmount().toPlainString();
-
-        AlipayTradePagePayModel model = new AlipayTradePagePayModel();
-        model.setOutTradeNo(outTradeNo);
-        model.setTotalAmount(totalAmount);
-        model.setSubject(subject);
-        model.setProductCode("FAST_INSTANT_TRADE_PAY");
-        model.setQrPayMode("2");           // 订单码-跳转模式
-        model.setIntegrationType("PCWEB"); // PC端访问
-
-        request.setBizModel(model);
-
-        log.info("拉起支付宝支付: outTradeNo={}, totalAmount={}, subject={}", outTradeNo, totalAmount, subject);
-
-        // 4. 生成表单 HTML 并返回
-        try {
-            String form = alipayClient.pageExecute(request).getBody();
-            log.info("支付宝支付表单生成成功，orderNo={}", order.getOrderNo());
-            return form;
-        } catch (AlipayApiException e) {
-            log.error("支付宝支付表单生成失败", e);
-            throw new BusinessException("发起支付失败，请稍后重试");
-        }
-    }
+		try {
+			return alipayClient.pageExecute(request).getBody();
+		} catch (AlipayApiException e) {
+			log.error("支付宝支付表单生成失败", e);
+			throw new BusinessException("发起支付失败，请稍后重试");
+		}
+	}
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -213,13 +205,24 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
                 .set(Payment::getPayTime, LocalDateTime.now())
                 .update();
 
-        // 8. 更新订单状态：待付款(1) → 待发货(2)，同时标记已支付
-		orderMapper.update(new LambdaUpdateWrapper<Order>()
-				.eq(Order::getOrderNo, outTradeNo)
+        // 8. 更新订单状态：待付款(1) → 待发货(2)，同时标记已支付（乐观锁防止并发取消覆盖）
+		int rows = orderMapper.update(new LambdaUpdateWrapper<Order>()
+				.eq(Order::getOrderNo, orderNo)
+				.eq(Order::getStatus, OrderStatusConstants.PENDING_PAYMENT)
 				.set(Order::getStatus, OrderStatusConstants.PENDING_DELIVERY)
 				.set(Order::getPayStatus, 1));
 
-        log.info("订单支付成功处理完成 orderNo={}", outTradeNo);
+		if (rows == 0) {
+			log.warn("[支付回调] 订单状态不是待付款，可能已被取消 orderNo={} tradeNo={}", orderNo, tradeNo);
+			sessionManager.broadcast(JSON.toJSONString(Map.of(
+				"type", "PAY_CANCEL_CONFLICT",
+				"orderNo", orderNo,
+				"tradeNo", tradeNo,
+				"message", "用户已付款但订单被取消，需人工处理退款"
+			)));
+			return "success";
+		}
+        log.info("订单支付成功处理完成 orderNo={}",orderNo);
 	    // 9.支付回调成功时,通知商家
 	    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 	    String message = JSON.toJSONString(Map.of(
@@ -244,12 +247,15 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 
 		// 查询原订单获取订单号
 		Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getId, one.getOrderId()));
-
+		Payment payment = lambdaQuery()
+				.eq(Payment::getOrderId, order.getId())
+				.eq(Payment::getStatus, 1)  // 只取已支付的
+				.one();
 		try {
 			AlipayTradeRefundRequest request = new AlipayTradeRefundRequest();
 			AlipayTradeRefundModel model = new AlipayTradeRefundModel();
 
-			model.setOutTradeNo(order.getOrderNo());                           // 原支付订单号
+			model.setOutTradeNo(payment.getOrderNo());                           // 原支付订单号
 			model.setRefundAmount(one.getActualRefundAmount().toString());     // 实际退款金额
 			model.setRefundReason(one.getReason());                            // 退款原因
 			model.setOutRequestNo(one.getId().toString());                     // 退款请求号，唯一
@@ -262,7 +268,10 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 				one.setStatus(ReturnOrderStatusConstant.REFUNDED);
 				returnOrderMapper.updateById(one);
 				//更新支付记录
-				lambdaUpdate().eq(Payment::getOrderNo, order.getOrderNo()).set(Payment::getStatus, 2).update();
+				lambdaUpdate()
+						.eq(Payment::getId, payment.getId())
+						.set(Payment::getStatus, 2)
+						.update();
 				// 回滚销量
 				OrderItem orderItem = orderItemService.getById(one.getOrderItemId());
 				productService.lambdaUpdate()

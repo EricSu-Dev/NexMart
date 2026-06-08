@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.nex.nexmart.common.PageResult;
 import com.nex.nexmart.common.constant.RedisSeckillConstants;
+import com.nex.nexmart.exception.BusinessException;
 import com.nex.nexmart.model.dto.seckill.SeckillActivityDTO;
 import com.nex.nexmart.model.entity.seckill.SeckillActivity;
 import com.nex.nexmart.model.entity.seckill.SeckillItem;
@@ -65,7 +66,7 @@ public class SeckillActivityServiceImpl extends ServiceImpl<SeckillActivityMappe
 	@Override
 	public void createActivity(SeckillActivityDTO dto) {
 		if (!dto.getEndTime().isAfter(dto.getStartTime())) {
-			throw new RuntimeException("结束时间必须晚于开始时间");
+			throw new BusinessException("结束时间必须晚于开始时间");
 		}
 		SeckillActivity activity = new SeckillActivity();
 		BeanUtils.copyProperties(dto, activity);
@@ -78,13 +79,13 @@ public class SeckillActivityServiceImpl extends ServiceImpl<SeckillActivityMappe
 	@Override
 	public void updateActivity(Long id, SeckillActivityDTO dto) {
 		SeckillActivity activity = getById(id);
-		if (activity == null) throw new RuntimeException("活动不存在");
+		if (activity == null) throw new BusinessException("活动不存在");
 		LocalDateTime now = LocalDateTime.now();
 		boolean isOngoing = !now.isBefore(activity.getStartTime())
 				&& !now.isAfter(activity.getEndTime());
-		if (activity.getStatus() != 2 && isOngoing) throw new RuntimeException("进行中且已启用的活动不能编辑");
+		if (activity.getStatus() != 2 && isOngoing) throw new BusinessException("进行中且已启用的活动不能编辑");
 		if (!dto.getEndTime().isAfter(dto.getStartTime())) {
-			throw new RuntimeException("结束时间必须晚于开始时间");
+			throw new BusinessException("结束时间必须晚于开始时间");
 		}
 		BeanUtils.copyProperties(dto, activity);
 		updateById(activity);
@@ -94,11 +95,11 @@ public class SeckillActivityServiceImpl extends ServiceImpl<SeckillActivityMappe
 	@Override
 	public void deleteActivity(Long id) {
 		SeckillActivity activity = getById(id);
-		if (activity == null) throw new RuntimeException("活动不存在");
+		if (activity == null) throw new BusinessException("活动不存在");
 		LocalDateTime now = LocalDateTime.now();
 		boolean isOngoing = !now.isBefore(activity.getStartTime())
 				&& !now.isAfter(activity.getEndTime());
-		if (activity.getStatus() != 2 && isOngoing) throw new RuntimeException("进行中且已启用的活动不能删除");
+		if (activity.getStatus() != 2 && isOngoing) throw new BusinessException("进行中且已启用的活动不能删除");
 		removeById(id);
 		redisTemplate.delete(RedisSeckillConstants.SECKILL_ACTIVITY+activity.getActivityType());
 	}
@@ -106,7 +107,7 @@ public class SeckillActivityServiceImpl extends ServiceImpl<SeckillActivityMappe
 	@Override
 	public void updateStatus(Long id, Integer status) {
 		SeckillActivity activity = getById(id);
-		if (activity == null) throw new RuntimeException("活动不存在");
+		if (activity == null) throw new BusinessException("活动不存在");
 		activity.setStatus(status);
 		updateById(activity);
 		redisTemplate.delete(RedisSeckillConstants.SECKILL_ACTIVITY+activity.getActivityType());
@@ -171,12 +172,16 @@ public class SeckillActivityServiceImpl extends ServiceImpl<SeckillActivityMappe
 						.list();
 
 				// 5. 写缓存, 随机过期时间，防止雪崩,返回空值, 防止缓存穿透
-				redisTemplate.opsForValue().set(
-						cacheKey,
-						JSON.toJSONString(activities),
-						5 + new Random().nextInt(3),
-						TimeUnit.MINUTES
-				);
+				if (activities == null || activities.isEmpty()) {
+					redisTemplate.opsForValue().set(cacheKey, "[]", 2, TimeUnit.MINUTES); // 空值TTL设短一点
+				} else {
+					redisTemplate.opsForValue().set(
+							cacheKey,
+							JSON.toJSONString(activities),
+							5 + new Random().nextInt(3),
+							TimeUnit.MINUTES
+					);
+				}
 
 				return toVO(activities);
 			} finally {

@@ -10,4 +10,15 @@
         WHERE user_id = #{userId}
           AND coupon_id = #{couponId}
     </select>
+
+    <select id="countByUserAndCoupons" resultType="map">
+        SELECT coupon_id, COUNT(*) AS cnt
+        FROM coupon_user
+        WHERE user_id = #{userId}
+          AND coupon_id IN
+        <foreach collection="couponIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        GROUP BY coupon_id
+    </select>
 </mapper>

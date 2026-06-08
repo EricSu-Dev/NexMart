@@ -8,7 +8,7 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
 /**
- * Security 登录时调用此类从数据库加载用户
+ * Security 登录时调用此类从数据库加载用户并返回SecurityUserDetails(包含从数据库查到的 BCrypt 密文密码)
  */
 @Service
 @RequiredArgsConstructor

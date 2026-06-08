@@ -57,6 +57,9 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 	private final SeckillActivityMapper seckillActivityMapper;
 	private final RedisTemplate<String,String> redisTemplate;
 
+	private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT =
+			new DefaultRedisScript<>(RedisSeckillConstants.RELEASE_LOCK_SCRIPT, Long.class);
+
 	@Override
 	public PageResult<SeckillProductItemVO> productList(Integer current, Integer size, Boolean onlyUnbound,Long activityId) {
 		Page<SeckillProductItemVO> pageParam = new Page<>(current, size);
@@ -269,7 +272,7 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 						boolean success = productSpecService.lambdaUpdate()
 								.eq(ProductSpec::getId, item.getProductSpecId())
 								.setSql("stock = stock - " + item.getSeckillStock())
-								.gt(ProductSpec::getStock, 0)
+								.ge(ProductSpec::getStock, item.getSeckillStock())
 								.update();
 						if (!success) {
 							throw new BusinessException("商品ID为"+item.getProductId()+"的规格的库存不足，预占失败");
@@ -283,7 +286,7 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 						boolean success = productService.lambdaUpdate()
 								.eq(Product::getId, item.getProductId())
 								.setSql("stock = stock - " + item.getSeckillStock())
-								.gt(Product::getStock, 0)
+								.ge(Product::getStock, item.getSeckillStock())
 								.update();
 						if (!success) {
 							throw new BusinessException("商品ID为"+item.getProductId()+"的库存不足，预占失败");
@@ -359,7 +362,7 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 
 			// 2. 抢互斥锁
 			Boolean locked = redisTemplate.opsForValue()
-					.setIfAbsent(lockKey, "1", 10, TimeUnit.SECONDS);
+					.setIfAbsent(lockKey, requestId, 10, TimeUnit.SECONDS);
 
 			if (!Boolean.TRUE.equals(locked)) {
 				try { Thread.sleep(50); } catch (InterruptedException ignored) {}
@@ -379,7 +382,11 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 				// 4. 查DB
 				List<SeckillProductItemVO> list = baseMapper.productListByActivity(activityId, userId);
 
-				// 5. 写缓存（不含purchased，TTL加随机值防雪崩）
+				// 5. 写缓存（空值短TTL防穿透，正常值随机TTL防雪崩）
+				if (list == null || list.isEmpty()) {
+					redisTemplate.opsForValue().set(cacheKey, "[]", 2, TimeUnit.MINUTES);
+					return Collections.emptyList();
+				}
 				redisTemplate.opsForValue().set(
 						cacheKey,
 						JSON.toJSONString(list),
@@ -391,7 +398,7 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 				fillProductPurchased(list, userId);
 				return list;
 			} finally {
-				redisTemplate.execute(new DefaultRedisScript<>(RedisSeckillConstants.RELEASE_LOCK_SCRIPT, Long.class),
+				redisTemplate.execute(RELEASE_LOCK_SCRIPT,
 						Collections.singletonList(lockKey), requestId);
 			}
 		}
@@ -412,6 +419,8 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 			if (cached != null) {
 				if ("[]".equals(cached)) return Collections.emptyList();
 				List<SeckillCouponItemVO> list = JSON.parseArray(cached, SeckillCouponItemVO.class);
+				list = filterCouponsByTime(list);
+				if (list.isEmpty()) return Collections.emptyList();
 				fillCouponPurchased(list, userId);
 				return list;
 			}
@@ -431,19 +440,20 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 				if (cached != null) {
 					if ("[]".equals(cached)) return Collections.emptyList();
 					List<SeckillCouponItemVO> list = JSON.parseArray(cached, SeckillCouponItemVO.class);
+					list = filterCouponsByTime(list);
+					if (list.isEmpty()) return Collections.emptyList();
 					fillCouponPurchased(list, userId);
 					return list;
 				}
 
 				// 4. 查DB
 				List<SeckillCouponItemVO> list = baseMapper.couponListByActivity(activityId, userId);
-				list.removeIf(item -> {
-					LocalDateTime now = LocalDateTime.now();
-					return now.isBefore(item.getCouponReceiveStart())
-							|| now.isAfter(item.getCouponReceiveEnd());
-				});
 
-				// 5. 写缓存（不含purchased，TTL加随机值防雪崩）
+				// 5. 写缓存（空值短TTL防穿透，全量数据随机TTL防雪崩）
+				if (list == null || list.isEmpty()) {
+					redisTemplate.opsForValue().set(cacheKey, "[]", 2, TimeUnit.MINUTES);
+					return Collections.emptyList();
+				}
 				redisTemplate.opsForValue().set(
 						cacheKey,
 						JSON.toJSONString(list),
@@ -451,29 +461,53 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 						TimeUnit.MINUTES
 				);
 
-				// 6. 实时填充purchased
+				// 6. 时间过滤 + 实时填充purchased
+				list = filterCouponsByTime(list);
 				fillCouponPurchased(list, userId);
 				return list;
 			} finally {
-				redisTemplate.execute(new DefaultRedisScript<>(RedisSeckillConstants.RELEASE_LOCK_SCRIPT, Long.class),
+				redisTemplate.execute(RELEASE_LOCK_SCRIPT,
 						Collections.singletonList(lockKey), requestId);
 			}
 		}
 	}
 
-	// 抽取：实时填充purchased
+	private List<SeckillCouponItemVO> filterCouponsByTime(List<SeckillCouponItemVO> list) {
+		LocalDateTime now = LocalDateTime.now();
+		return list.stream()
+				.filter(item -> !now.isBefore(item.getCouponReceiveStart())
+						&& !now.isAfter(item.getCouponReceiveEnd()))
+				.collect(Collectors.toList());
+	}
+
+	// 批量填充purchased（一条SQL替代N次循环查询）
 	private void fillProductPurchased(List<SeckillProductItemVO> list, Long userId) {
+		if (list.isEmpty()) return;
+		List<Long> itemIds = list.stream().map(SeckillProductItemVO::getId).toList();
+		Map<Long, Long> countMap = new HashMap<>();
+		for (Map<String, Object> row : orderMapper.countByUserAndSeckillItems(userId, itemIds)) {
+			Long seckillItemId = ((Number) row.get("seckill_item_id")).longValue();
+			Long cnt = ((Number) row.get("cnt")).longValue();
+			countMap.put(seckillItemId, cnt);
+		}
 		list.forEach(item -> {
-			long bought = orderMapper.countByUserAndSeckillItem(userId, item.getId());
+			long bought = countMap.getOrDefault(item.getId(), 0L);
 			item.setPurchased(bought >= item.getPerLimit());
 		});
 	}
 
 	private void fillCouponPurchased(List<SeckillCouponItemVO> list, Long userId) {
+		if (list.isEmpty()) return;
+		List<Long> couponIds = list.stream().map(SeckillCouponItemVO::getCouponId).toList();
+		Map<Long, Long> countMap = new HashMap<>();
+		for (Map<String, Object> row : couponUserMapper.countByUserAndCoupons(userId, couponIds)) {
+			Long couponId = ((Number) row.get("coupon_id")).longValue();
+			Long cnt = ((Number) row.get("cnt")).longValue();
+			countMap.put(couponId, cnt);
+		}
 		list.forEach(item -> {
-			long owned = couponUserMapper.countByUserAndCoupon(userId, item.getCouponId());
-			Coupon coupon = couponService.getById(item.getCouponId());
-			item.setPurchased(owned >= coupon.getPerLimit());
+			long owned = countMap.getOrDefault(item.getCouponId(), 0L);
+			item.setPurchased(owned >= item.getCouponPerLimit());
 		});
 	}
 
@@ -495,6 +529,11 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 					.list();
 
 			for (SeckillItem item : items) {
+				// 删除该秒杀商品的Redis库存和限购计数
+				String stockKey = RedisSeckillConstants.SECKILL_PRODUCT_STOCK + item.getId();
+				String usersKey = RedisSeckillConstants.SECKILL_PRODUCT_USERS + item.getId();
+				redisTemplate.delete(Arrays.asList(stockKey, usersKey));
+
 				if (item.getSeckillStock() <= 0) continue;
 				if (item.getProductSpecId() != null) {
 					productSpecService.lambdaUpdate()
@@ -509,6 +548,40 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 			}
 
 			// 归还完毕，将活动状态改为禁用，防止重复归还
+			seckillActivityMapper.update(null,
+					new LambdaUpdateWrapper<SeckillActivity>()
+							.eq(SeckillActivity::getId, activity.getId())
+							.set(SeckillActivity::getStatus, 2)
+			);
+		}
+	}
+
+	@Scheduled(fixedDelay = 60000) // 每分钟执行一次
+	public void returnExpiredCouponActivityStock() {
+		// 查出所有已过期且未处理的秒杀券活动
+		List<SeckillActivity> expiredActivities = seckillActivityMapper.selectList(
+				new LambdaQueryWrapper<SeckillActivity>()
+						.eq(SeckillActivity::getStatus, 1)
+						.eq(SeckillActivity::getActivityType, 2)
+						.lt(SeckillActivity::getEndTime, LocalDateTime.now())
+		);
+
+		for (SeckillActivity activity : expiredActivities) {
+			// 查出该活动下所有券项
+			List<SeckillItem> items = lambdaQuery()
+					.eq(SeckillItem::getActivityId, activity.getId())
+					.eq(SeckillItem::getItemType, 2)
+					.list();
+
+			// 删除该活动下所有秒杀券的Redis库存和限购计数
+			// 券类型不预占库存（coupon.remained 本身即实时剩余），无需归还DB库存
+			for (SeckillItem item : items) {
+				String stockKey = RedisSeckillConstants.SECKILL_COUPON_STOCK + item.getId();
+				String usersKey = RedisSeckillConstants.SECKILL_COUPON_USERS + item.getId();
+				redisTemplate.delete(Arrays.asList(stockKey, usersKey));
+			}
+
+			// 将活动状态改为禁用
 			seckillActivityMapper.update(null,
 					new LambdaUpdateWrapper<SeckillActivity>()
 							.eq(SeckillActivity::getId, activity.getId())
