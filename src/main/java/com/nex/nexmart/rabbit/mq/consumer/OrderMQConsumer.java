@@ -65,7 +65,17 @@ public class OrderMQConsumer {
 	                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
 		Long userId = message.getUserId();
 		Long seckillItemId = message.getSeckillItemId();
-		log.info("[SeckillMQ] 收到秒杀券下单消息 userId={} seckillItemId={}", userId, seckillItemId);
+		log.info("[SeckillMQ] 收到秒杀券下单消息 userId={} seckillItemId={} messageId={}", userId, seckillItemId, message.getMessageId());
+
+		// 幂等去重：同一消息只处理一次（防重复消费）
+		String dedupKey = RedisSeckillConstants.SECKILL_MSG_DEDUP + message.getMessageId();
+		Boolean firstTime = redisTemplate.opsForValue()
+				.setIfAbsent(dedupKey, "1", 1, java.util.concurrent.TimeUnit.DAYS);
+		if (!Boolean.TRUE.equals(firstTime)) {
+			log.warn("[SeckillMQ] 重复消息，跳过处理 userId={} seckillItemId={}", userId, seckillItemId);
+			channel.basicAck(deliveryTag, false);
+			return;
+		}
 
 		try {
 			seckillOrderService.createCouponOrderAsync(userId, seckillItemId);
@@ -77,6 +87,8 @@ public class OrderMQConsumer {
 			channel.basicAck(deliveryTag, false);
 		} catch (Exception e) {
 			log.error("[SeckillMQ] 秒杀券下单失败 userId={} seckillItemId={}", userId, seckillItemId, e);
+			// 删除去重标记，允许重试
+			redisTemplate.delete(dedupKey);
 			// 回滚Redis（Lua保证原子性）
 			String stockKey = RedisSeckillConstants.SECKILL_COUPON_STOCK + seckillItemId;
 			String userKey = RedisSeckillConstants.SECKILL_COUPON_USERS + seckillItemId;
@@ -98,7 +110,17 @@ public class OrderMQConsumer {
 	                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
 		Long userId = message.getUserId();
 		Long seckillItemId = message.getSeckillItemId();
-		log.info("[SeckillMQ] 收到秒杀商品下单消息 userId={} seckillItemId={}", userId, seckillItemId);
+		log.info("[SeckillMQ] 收到秒杀商品下单消息 userId={} seckillItemId={} messageId={}", userId, seckillItemId, message.getMessageId());
+
+		// 幂等去重：同一消息只处理一次（防重复消费）
+		String dedupKey = RedisSeckillConstants.SECKILL_MSG_DEDUP + message.getMessageId();
+		Boolean firstTime = redisTemplate.opsForValue()
+				.setIfAbsent(dedupKey, "1", 1, java.util.concurrent.TimeUnit.DAYS);
+		if (!Boolean.TRUE.equals(firstTime)) {
+			log.warn("[SeckillMQ] 重复消息，跳过处理 userId={} seckillItemId={}", userId, seckillItemId);
+			channel.basicAck(deliveryTag, false);
+			return;
+		}
 
 		try {
 			seckillOrderService.createProductOrderAsync(message);
@@ -110,6 +132,8 @@ public class OrderMQConsumer {
 			channel.basicAck(deliveryTag, false);
 		} catch (Exception e) {
 			log.error("[SeckillMQ] 秒杀商品下单失败 userId={} seckillItemId={}", userId, seckillItemId, e);
+			// 删除去重标记，允许重试
+			redisTemplate.delete(dedupKey);
 			// 回滚Redis（Lua保证原子性）
 			String stockKey = RedisSeckillConstants.SECKILL_PRODUCT_STOCK + seckillItemId;
 			String userKey = RedisSeckillConstants.SECKILL_PRODUCT_USERS + seckillItemId;

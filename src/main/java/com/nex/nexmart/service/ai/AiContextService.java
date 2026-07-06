@@ -96,11 +96,11 @@ public class AiContextService {
 						.ge(SeckillActivity::getEndTime, now)
 		);
 		if (list.isEmpty()) return "当前没有进行中的秒杀活动。";
-		StringBuilder sb = new StringBuilder("当前进行中的秒杀活动：\n");
+		StringBuilder sb = new StringBuilder("当前进行中的秒杀活动:\n");
 		for (SeckillActivity a : list) {
-			sb.append(String.format("- %s，截止%s\n",
+			sb.append(String.format("- %s,截止%s\n",
 					a.getName(),
-					a.getEndTime().format(DateTimeFormatter.ofPattern("MM月dd日HH时"))));
+					a.getEndTime().format(DateTimeFormatter.ofPattern("yyyy年MM月dd日HH时"))));
 		}
 		return sb.toString();
 	}

@@ -58,6 +58,11 @@ public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponU
 		}
 
 		// 检查是否超出每人限领数
+		couponService.lambdaUpdate()
+				.eq(Coupon::getId, couponId)
+				.setSql("updated_at = updated_at")
+				.update();
+
 		long myCount = lambdaQuery()
 						.eq(CouponUser::getUserId, userId)
 						.eq(CouponUser::getCouponId, couponId)
@@ -67,6 +72,17 @@ public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponU
 		}
 
 		// 写入领取记录
+		if (coupon.getTotal() != -1) {
+			boolean stockUpdated = couponService.lambdaUpdate()
+					.eq(Coupon::getId, couponId)
+					.gt(Coupon::getRemained, 0)
+					.setSql("remained = remained - 1")
+					.update();
+			if (!stockUpdated) {
+				throw new RuntimeException("Coupon stock is not enough");
+			}
+		}
+
 		CouponUser couponUser = new CouponUser();
 		couponUser.setUserId(userId);
 		couponUser.setCouponId(couponId);
@@ -77,10 +93,6 @@ public class CouponUserServiceImpl extends ServiceImpl<CouponUserMapper, CouponU
 		couponUserMapper.insert(couponUser);
 
 		// 扣减剩余数量
-		if (coupon.getTotal() != -1) {
-			coupon.setRemained(coupon.getRemained() - 1);
-			couponService.updateById(coupon);
-		}
 	}
 
 	@Override

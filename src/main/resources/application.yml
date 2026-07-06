@@ -1,12 +1,12 @@
 spring:
   profiles:
-    active: local
+    active: prod
   application:
     name: nexmart
 
   ai:
     openai:
-      api-key: ${DEEPSEEK_API_KEY:请在application-local.yml中配置}
+      api-key: ${DEEPSEEK_API_KEY:请在application-prod.yml中配置}
       base-url: https://api.deepseek.com
       chat:
         options:
@@ -81,14 +81,14 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 jwt:
-  secret: ${JWT_SECRET:请在application-local.yml中配置}
+  secret: ${JWT_SECRET:请在application-prod.yml中配置}
   expiration: 86400000
 
 aliyun:
   oss:
     endpoint: oss-cn-beijing.aliyuncs.com
-    access-key-id: ${OSS_ACCESS_KEY_ID:请在application-local.yml中配置}
-    access-key-secret: ${OSS_ACCESS_KEY_SECRET:请在application-local.yml中配置}
+    access-key-id: ${OSS_ACCESS_KEY_ID:请在application-prod.yml中配置}
+    access-key-secret: ${OSS_ACCESS_KEY_SECRET:请在application-prod.yml中配置}
     bucket-name: java-poke
     url-prefix: https://java-poke.oss-cn-beijing.aliyuncs.com/
 
@@ -99,12 +99,12 @@ springdoc:
     path: /swagger-ui.html
 
 alipay:
-  app-id: ${ALIPAY_APP_ID:请在application-local.yml中配置}
-  private-key: ${ALIPAY_PRIVATE_KEY:请在application-local.yml中配置}
-  alipay-public-key: ${ALIPAY_PUBLIC_KEY:请在application-local.yml中配置}
+  app-id: ${ALIPAY_APP_ID:请在application-prod.yml中配置}
+  private-key: ${ALIPAY_PRIVATE_KEY:请在application-prod.yml中配置}
+  alipay-public-key: ${ALIPAY_PUBLIC_KEY:请在application-prod.yml中配置}
   gateway-url: https://openapi-sandbox.dl.alipaydev.com/gateway.do
-  notify-url: ${ALIPAY_NOTIFY_URL:请在application-local.yml中配置}
-  return-url: http://localhost:8087/api/user/payment/return
+  notify-url: ${ALIPAY_NOTIFY_URL:请在application-prod.yml中配置}
+  return-url: https://nexmart.tech/api/user/payment/return
 
 logging:
   level:

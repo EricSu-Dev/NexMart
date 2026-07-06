@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 public class RabbitMQConfig {
 
 	private RabbitTemplate rabbitTemplate;
+	private static final String PENDING_MESSAGE_ID_HEADER = "x-pending-message-id";
 
 	// 重试线程池
 	private final ScheduledExecutorService retryExecutor =
@@ -147,6 +148,7 @@ public class RabbitMQConfig {
 	public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory) {
 		RabbitTemplate rabbitTemplate = new RabbitTemplate(connectionFactory);
 		rabbitTemplate.setMessageConverter(jsonMessageConverter());
+		rabbitTemplate.setMandatory(true);
 
 		// 开启 Confirm：ack=false 时重试最多3次，间隔 2s/4s/6s
 		rabbitTemplate.setConfirmCallback((correlationData, ack, cause) -> {
@@ -159,9 +161,27 @@ public class RabbitMQConfig {
 		});
 
 		// 开启 Return
-		rabbitTemplate.setReturnsCallback(returned -> log.error("[RabbitMQ] 消息路由失败 message={}", returned.getMessage()));
+		rabbitTemplate.setReturnsCallback(this::handleReturnedMessage);
 		this.rabbitTemplate = rabbitTemplate;
 		return rabbitTemplate;
+	}
+
+	private void handleReturnedMessage(ReturnedMessage returned) {
+		Object correlationId = returned.getMessage().getMessageProperties()
+				.getHeaders().get(PENDING_MESSAGE_ID_HEADER);
+		if (correlationId == null) {
+			log.error("[RabbitMQ] 消息路由失败且缺少pending id exchange={} routingKey={} message={}",
+					returned.getExchange(), returned.getRoutingKey(), returned.getMessage());
+			return;
+		}
+
+		PendingMessage pm = pendingMap.remove(correlationId.toString());
+		log.error("[RabbitMQ] 消息路由失败 exchange={} routingKey={} replyCode={} replyText={}",
+				returned.getExchange(), returned.getRoutingKey(),
+				returned.getReplyCode(), returned.getReplyText());
+		if (pm != null && pm.onExhausted != null) {
+			pm.onExhausted.run();
+		}
 	}
 
 	private void handleConfirmNack(CorrelationData correlationData, String cause) {
@@ -183,9 +203,20 @@ public class RabbitMQConfig {
 		log.warn("[RabbitMQ] Confirm nack，第{}次重试 exchange={} routingKey={} delay={}s",
 				pm.retries, pm.exchange, pm.routingKey, delay);
 		retryExecutor.schedule(() -> {
-			CorrelationData newCd = new CorrelationData(correlationData.getId());
-			rabbitTemplate.convertAndSend(pm.exchange, pm.routingKey, pm.payload, newCd);
+			sendPendingMessage(correlationData.getId(), pm);
 		}, delay, TimeUnit.SECONDS);
+	}
+
+	private void sendPendingMessage(String correlationId, PendingMessage pendingMessage) {
+		rabbitTemplate.convertAndSend(
+				pendingMessage.exchange,
+				pendingMessage.routingKey,
+				pendingMessage.payload,
+				message -> {
+					message.getMessageProperties().setHeader(PENDING_MESSAGE_ID_HEADER, correlationId);
+					return message;
+				},
+				new CorrelationData(correlationId));
 	}
 
 	/**
@@ -200,11 +231,7 @@ public class RabbitMQConfig {
 				RabbitMQConstants.ORDER_DELAY_EXCHANGE,
 				RabbitMQConstants.ORDER_DELAY_ROUTING_KEY,
 				msg, null));
-		rabbitTemplate.convertAndSend(
-				RabbitMQConstants.ORDER_DELAY_EXCHANGE,
-				RabbitMQConstants.ORDER_DELAY_ROUTING_KEY,
-				msg,
-				new CorrelationData(correlationId));
+		sendPendingMessage(correlationId, pendingMap.get(correlationId));
 	}
 
 	/**
@@ -216,8 +243,7 @@ public class RabbitMQConfig {
 		pendingMap.put(correlationId, new PendingMessage(
 				exchange, routingKey, payload, onExhausted));
 		try {
-			rabbitTemplate.convertAndSend(exchange, routingKey, payload,
-					new CorrelationData(correlationId));
+			sendPendingMessage(correlationId, pendingMap.get(correlationId));
 		} catch (Exception e) {
 			// convertAndSend 同步抛异常 → 立即回滚，不等异步 Confirm
 			pendingMap.remove(correlationId);

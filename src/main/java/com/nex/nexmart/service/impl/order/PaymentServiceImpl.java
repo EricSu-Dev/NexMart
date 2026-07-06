@@ -236,6 +236,7 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
     }
 
 	@Override
+	@Transactional
 	public void refund(Long returnId) {
 		ReturnOrder one = returnOrderMapper.selectById(returnId);
 		if (one == null) {

@@ -41,6 +41,9 @@ public class RedisSeckillConstants {
 					"then return redis.call('del', KEYS[1]) " +
 					"else return 0 end";
 
+	// 秒杀消息幂等去重（防重复消费）
+	public static final String SECKILL_MSG_DEDUP = "NexMart:seckill:msg:dedup:";
+
 	//mq失败回滚脚本
 	public static final String SECKILL_ROLLBACK_LUA =
 			"redis.call('incr', KEYS[1])\n" +

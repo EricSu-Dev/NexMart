@@ -527,6 +527,12 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 					.eq(SeckillItem::getActivityId, activity.getId())
 					.eq(SeckillItem::getItemType, 1)
 					.list();
+			//删除活动过期7天后的秒杀项
+			if (activity.getEndTime().plusDays(7).isBefore(LocalDateTime.now())) {
+				for (SeckillItem item : items) {
+					removeById(item.getId());
+				}
+			}
 
 			for (SeckillItem item : items) {
 				// 删除该秒杀商品的Redis库存和限购计数
@@ -553,6 +559,8 @@ public class SeckillItemServiceImpl extends ServiceImpl<SeckillItemMapper, Secki
 							.eq(SeckillActivity::getId, activity.getId())
 							.set(SeckillActivity::getStatus, 2)
 			);
+
+
 		}
 	}
 

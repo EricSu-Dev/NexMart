@@ -242,30 +242,38 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
 	// 库存校验 + 数据库扣减
 	private void deductStock(CartItem cartItem, Product product, Map<Long, ProductSpec> specMap) {
+		int quantity = cartItem.getQuantity();
 		if (cartItem.getSpecId() != null) {
 			ProductSpec spec = specMap.get(cartItem.getSpecId());
-			if (spec.getStock() < cartItem.getQuantity()) {
-				throw new BusinessException("商品 [" + product.getName() + "] 的["+spec.getSpecName()+"]规格的库存不足");
+			if (spec == null) {
+				throw new BusinessException("Product spec not found");
 			}
-			productSpecService.lambdaUpdate()
+			boolean specUpdated = productSpecService.lambdaUpdate()
 					.eq(ProductSpec::getId, spec.getId())
-					.gt(ProductSpec::getStock, 0)//防止并发情景超卖
-					.set(ProductSpec::getStock, spec.getStock() - cartItem.getQuantity())
+					.ge(ProductSpec::getStock, quantity)
+					.setSql("stock = stock - " + quantity)
 					.update();
-		} else {
-			if (product.getStock() < cartItem.getQuantity()) {
-				throw new BusinessException("商品 [" + product.getName() + "] 库存不足");
+			if (!specUpdated) {
+				throw new BusinessException("Product spec stock is not enough");
 			}
 		}
-		// 扣商品总库存，提取出来
-		int newStock = product.getStock() - cartItem.getQuantity();
-		if (newStock == 0) clearHomeSectionAllCache();
-		productService.lambdaUpdate()
+
+		boolean productUpdated = productService.lambdaUpdate()
 				.eq(Product::getId, product.getId())
-				.gt(Product::getStock, 0)
-				.set(Product::getStock, newStock)
-				.set(newStock == 0, Product::getStatus, 2)
+				.ge(Product::getStock, quantity)
+				.setSql("stock = stock - " + quantity)
 				.update();
+		if (!productUpdated) {
+			throw new BusinessException("Product stock is not enough");
+		}
+		if (product.getStock() != null && product.getStock() - quantity == 0) {
+			clearHomeSectionAllCache();
+			productService.lambdaUpdate()
+					.eq(Product::getId, product.getId())
+					.eq(Product::getStock, 0)
+					.set(Product::getStatus, 2)
+					.update();
+		}
 	}
 
 	@Override

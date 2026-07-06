@@ -1,4 +1,4 @@
-package com.nex.nexmart.service.impl;
+package com.nex.nexmart.service.impl.checkinPoint;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -24,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
 * @author Eric
@@ -118,7 +119,13 @@ public class PointsMallItemServiceImpl extends ServiceImpl<PointsMallItemMapper,
 	@Override
 	public PointsMallVO getUserMall(Long userId) {
 		// 查上架兑换项
-		List<PointsMallItemVO> items = baseMapper.selectItemsWithCoupon(null,null,1);
+		List<PointsMallItemVO> items = baseMapper.selectItemsWithCoupon(null, null, 1);
+
+		// 过滤已过领取截止时间的券（receiveEnd 为 null 视为不限时，不过滤）
+		LocalDateTime now = LocalDateTime.now();
+		items = items.stream()
+				.filter(item -> item.getReceiveEnd() == null || item.getReceiveEnd().isAfter(now))
+				.collect(Collectors.toList());
 
 		// 查用户积分
 		UserPoints userPoints = userPointsService.lambdaQuery().eq(UserPoints::getUserId, userId).one();
@@ -157,6 +164,11 @@ public class PointsMallItemServiceImpl extends ServiceImpl<PointsMallItemMapper,
 		}
 
 		// 5. 校验每人限领
+		couponService.lambdaUpdate()
+				.eq(Coupon::getId, coupon.getId())
+				.setSql("updated_at = updated_at")
+				.update();
+
 		long received = couponUserMapper.selectCount(
 				new LambdaQueryWrapper<CouponUser>()
 						.eq(CouponUser::getUserId, userId)
@@ -182,15 +194,19 @@ public class PointsMallItemServiceImpl extends ServiceImpl<PointsMallItemMapper,
 				"兑换券：" + coupon.getName(), itemId);
 
 		// 9. 扣减券库存
-		if (coupon.getTotal() != -1) {
-			couponService.lambdaUpdate()
-					.eq(Coupon::getId, coupon.getId())
-					.setSql("remained = remained - 1")
-					.update();
-		}
-
 		// 10. 发券
 		LocalDateTime expireAt = now.plusDays(coupon.getValidDays());
+		if (coupon.getTotal() != -1) {
+			boolean stockUpdated = couponService.lambdaUpdate()
+					.eq(Coupon::getId, coupon.getId())
+					.gt(Coupon::getRemained, 0)
+					.setSql("remained = remained - 1")
+					.update();
+			if (!stockUpdated) {
+				throw new BusinessException("Coupon stock is not enough");
+			}
+		}
+
 		CouponUser couponUser = new CouponUser();
 		couponUser.setUserId(userId);
 		couponUser.setCouponId(coupon.getId());

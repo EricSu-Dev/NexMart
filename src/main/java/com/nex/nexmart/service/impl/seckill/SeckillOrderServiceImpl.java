@@ -118,6 +118,7 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 
 		// 6. 发MQ，异步处理写DB（带 Confirm 重试，nack 耗尽时自动 Lua 回滚）
 		SeckillCouponMessage msg = new SeckillCouponMessage();
+		msg.setMessageId(java.util.UUID.randomUUID().toString());
 		msg.setUserId(userId);
 		msg.setSeckillItemId(seckillItemId);
 		rabbitMQConfig.sendSeckillMessage(
@@ -190,6 +191,13 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 
 		// 4. 查商品+校验
 		Product product = productService.getById(item.getProductId());
+		Address userAddress = addressService.lambdaQuery()
+				.eq(Address::getId, dto.getAddressId())
+				.eq(Address::getUserId, userId)
+				.one();
+		if (userAddress == null) {
+			throw new BusinessException("Address not found");
+		}
 		if (product == null) {
 			throw new BusinessException("商品不存在");
 		}
@@ -235,6 +243,7 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 
 		// 7. 发MQ，异步处理写DB（带 Confirm 重试，nack 耗尽时自动 Lua 回滚）
 		SeckillProductOrderMessage msg = new SeckillProductOrderMessage();
+		msg.setMessageId(java.util.UUID.randomUUID().toString());
 		msg.setUserId(userId);
 		msg.setSeckillItemId(dto.getSeckillItemId());
 		msg.setSkuId(item.getProductSpecId());
@@ -285,7 +294,13 @@ public class SeckillOrderServiceImpl implements SeckillOrderService {
 		}
 
 		// 3. 查收货地址
-		Address address = addressService.getById(msg.getAddressId());
+		Address address = addressService.lambdaQuery()
+				.eq(Address::getId, msg.getAddressId())
+				.eq(Address::getUserId, userId)
+				.one();
+		if (address == null) {
+			throw new BusinessException("Address not found");
+		}
 
 		// 4. 生成订单
 		String orderNo = "SK" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))

@@ -58,6 +58,6 @@ public class PaymentController {
                           HttpServletResponse response) throws IOException {
         log.info("支付宝同步跳转回调");
         // 跳转到前端订单页，前端自己查询订单最新状态
-        response.sendRedirect("http://localhost:8085/orders");
+        response.sendRedirect("https://nexmart.tech/user/orders");
     }
 }

@@ -267,7 +267,14 @@ public class ReturnOrderServiceImpl extends ServiceImpl<ReturnOrderMapper, Retur
 		one.setStatus(ReturnOrderStatusConstant.REFUND_PROCESSING);
 		updateById(one);
 		// 调用支付宝沙箱进行退款
-		paymentService.refund(returnId);
+		try {
+			paymentService.refund(returnId);
+		} catch (Exception e) {
+			// 退款失败，回退状态让管理员可以重新操作退款
+			one.setStatus(ReturnOrderStatusConstant.APPROVED);
+			updateById(one);
+			throw new BusinessException("退款失败：" + e.getMessage());
+		}
 	}
 }
 
