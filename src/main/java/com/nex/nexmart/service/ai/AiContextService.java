@@ -41,6 +41,9 @@ public class AiContextService {
 
 	// 商品查询（按关键词，最多5条）
 	public String queryProduct(String keyword) {
+		if (keyword == null || keyword.isBlank()) {
+			return "";
+		}
 		String[] keywords = keyword.split("\\s+");
 		List<Product> products = productMapper.selectList(
 				new LambdaQueryWrapper<Product>()
