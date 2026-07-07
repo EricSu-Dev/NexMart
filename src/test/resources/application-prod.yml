@@ -3,3 +3,6 @@ spring:
     listener:
       simple:
         auto-startup: false
+  task:
+    scheduling:
+      enabled: false
