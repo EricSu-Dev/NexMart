@@ -19,6 +19,9 @@ public class AlipayProperties {
     /** 支付宝公钥 */
     private String alipayPublicKey;
 
+    /** 收款方支付宝用户ID，可选；配置后会在回调中校验 */
+    private String sellerId;
+
     /** 网关地址（沙箱用 openapi.alipaydev.com） */
     private String gatewayUrl;
 

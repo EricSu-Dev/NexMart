@@ -1,6 +1,6 @@
 package com.nex.nexmart.security;
 
-import com.nex.nexmart.common.constant.UserRoleConstants;
+import com.nex.nexmart.mapper.base.UserMapper;
 import com.nex.nexmart.model.entity.User;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -31,6 +31,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
 
     private final JwtUtil jwtUtil;
+	private final UserMapper userMapper;
 
     private static final String HEADER_NAME  = "Authorization";
     private static final String TOKEN_PREFIX = "Bearer ";
@@ -46,22 +47,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (StringUtils.hasText(token) && jwtUtil.validateToken(token)) {
             try {
                 Long   userId   = jwtUtil.getUserId(token);
-                String username = jwtUtil.getUsername(token);
                 String role     = jwtUtil.getRole(token);
 	            log.info("从token解析出的role: {}", role);
-                // 构建一个极简的 User 对象，避免数据库查询
-                User user = new User();
-                user.setId(userId);
-                user.setUsername(username);
-                
-                int roleInt = 0;
-                if (UserRoleConstants.STRING_ROLE_BOSS.equals(role)) {
-                    roleInt = UserRoleConstants.ROLE_BOSS;
-                } else if (UserRoleConstants.STRING_ROLE_ADMIN.equals(role)) {
-                    roleInt = UserRoleConstants.ROLE_ADMIN;
-                }
-                user.setRole(roleInt);
-                user.setStatus(1); // 既然 Token 合法，状态默认正常
+                User user = userMapper.selectById(userId);
+				if (user == null || user.getStatus() == null || user.getStatus() != 1) {
+					log.warn("JWT 对应用户不存在或已禁用 userId={}", userId);
+					SecurityContextHolder.clearContext();
+					filterChain.doFilter(request, response);
+					return;
+				}
 
                 SecurityUserDetails userDetails = new SecurityUserDetails(user);
 
@@ -75,7 +69,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         );
 
                 SecurityContextHolder.getContext().setAuthentication(authentication);
-                log.debug("JWT 认证通过 → userId={}, username={}, role={}", userId, username, role);
+                log.debug("JWT 认证通过 → userId={}, username={}, role={}", userId, user.getUsername(), role);
 
             } catch (Exception e) {
                 log.warn("JWT 解析异常: {}", e.getMessage());

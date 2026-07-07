@@ -99,8 +99,56 @@ public class RabbitMQConfig {
 	}
 
 	@Bean
+	public DirectExchange orderTimeoutRetryExchange() {
+		return new DirectExchange(RabbitMQConstants.ORDER_TIMEOUT_RETRY_EXCHANGE);
+	}
+
+	@Bean
+	public Queue orderTimeoutRetryQueue() {
+		return QueueBuilder.durable(RabbitMQConstants.ORDER_TIMEOUT_RETRY_QUEUE)
+				.ttl(10 * 1000)
+				.deadLetterExchange(RabbitMQConstants.ORDER_DEAD_EXCHANGE)
+				.deadLetterRoutingKey(RabbitMQConstants.ORDER_DEAD_ROUTING_KEY)
+				.build();
+	}
+
+	@Bean
+	public Binding orderTimeoutRetryBinding() {
+		return BindingBuilder.bind(orderTimeoutRetryQueue())
+				.to(orderTimeoutRetryExchange())
+				.with(RabbitMQConstants.ORDER_TIMEOUT_RETRY_ROUTING_KEY);
+	}
+
+	@Bean
+	public DirectExchange orderTimeoutFailedExchange() {
+		return new DirectExchange(RabbitMQConstants.ORDER_TIMEOUT_FAILED_EXCHANGE);
+	}
+
+	@Bean
+	public Queue orderTimeoutFailedQueue() {
+		return QueueBuilder.durable(RabbitMQConstants.ORDER_TIMEOUT_FAILED_QUEUE).build();
+	}
+
+	@Bean
+	public Binding orderTimeoutFailedBinding() {
+		return BindingBuilder.bind(orderTimeoutFailedQueue())
+				.to(orderTimeoutFailedExchange())
+				.with(RabbitMQConstants.ORDER_TIMEOUT_FAILED_ROUTING_KEY);
+	}
+
+	@Bean
 	public DirectExchange seckillOrderExchange() {
 		return new DirectExchange(RabbitMQConstants.SECKILL_ORDER_EXCHANGE);
+	}
+
+	@Bean
+	public DirectExchange seckillRetryExchange() {
+		return new DirectExchange(RabbitMQConstants.SECKILL_RETRY_EXCHANGE);
+	}
+
+	@Bean
+	public DirectExchange seckillFailedExchange() {
+		return new DirectExchange(RabbitMQConstants.SECKILL_FAILED_EXCHANGE);
 	}
 
 	@Bean
@@ -125,6 +173,62 @@ public class RabbitMQConfig {
 		return BindingBuilder.bind(seckillCouponOrderQueue())
 				.to(seckillOrderExchange())
 				.with(RabbitMQConstants.SECKILL_COUPON_ORDER_ROUTING_KEY);
+	}
+
+	@Bean
+	public Queue seckillProductOrderRetryQueue() {
+		return QueueBuilder.durable(RabbitMQConstants.SECKILL_PRODUCT_ORDER_RETRY_QUEUE)
+				.ttl(5 * 1000)
+				.deadLetterExchange(RabbitMQConstants.SECKILL_ORDER_EXCHANGE)
+				.deadLetterRoutingKey(RabbitMQConstants.SECKILL_PRODUCT_ORDER_ROUTING_KEY)
+				.build();
+	}
+
+	@Bean
+	public Binding seckillProductOrderRetryBinding() {
+		return BindingBuilder.bind(seckillProductOrderRetryQueue())
+				.to(seckillRetryExchange())
+				.with(RabbitMQConstants.SECKILL_PRODUCT_ORDER_RETRY_ROUTING_KEY);
+	}
+
+	@Bean
+	public Queue seckillCouponOrderRetryQueue() {
+		return QueueBuilder.durable(RabbitMQConstants.SECKILL_COUPON_ORDER_RETRY_QUEUE)
+				.ttl(5 * 1000)
+				.deadLetterExchange(RabbitMQConstants.SECKILL_ORDER_EXCHANGE)
+				.deadLetterRoutingKey(RabbitMQConstants.SECKILL_COUPON_ORDER_ROUTING_KEY)
+				.build();
+	}
+
+	@Bean
+	public Binding seckillCouponOrderRetryBinding() {
+		return BindingBuilder.bind(seckillCouponOrderRetryQueue())
+				.to(seckillRetryExchange())
+				.with(RabbitMQConstants.SECKILL_COUPON_ORDER_RETRY_ROUTING_KEY);
+	}
+
+	@Bean
+	public Queue seckillProductOrderFailedQueue() {
+		return QueueBuilder.durable(RabbitMQConstants.SECKILL_PRODUCT_ORDER_FAILED_QUEUE).build();
+	}
+
+	@Bean
+	public Binding seckillProductOrderFailedBinding() {
+		return BindingBuilder.bind(seckillProductOrderFailedQueue())
+				.to(seckillFailedExchange())
+				.with(RabbitMQConstants.SECKILL_PRODUCT_ORDER_FAILED_ROUTING_KEY);
+	}
+
+	@Bean
+	public Queue seckillCouponOrderFailedQueue() {
+		return QueueBuilder.durable(RabbitMQConstants.SECKILL_COUPON_ORDER_FAILED_QUEUE).build();
+	}
+
+	@Bean
+	public Binding seckillCouponOrderFailedBinding() {
+		return BindingBuilder.bind(seckillCouponOrderFailedQueue())
+				.to(seckillFailedExchange())
+				.with(RabbitMQConstants.SECKILL_COUPON_ORDER_FAILED_ROUTING_KEY);
 	}
 
 	//在应用启动时，自动把代码里声明的队列/交换机/绑定创建到 RabbitMQ 服务器上。

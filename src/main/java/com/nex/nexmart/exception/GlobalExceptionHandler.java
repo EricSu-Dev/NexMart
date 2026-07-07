@@ -7,11 +7,16 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import io.swagger.v3.oas.annotations.Hidden;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 
+import jakarta.validation.ConstraintViolationException;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -42,6 +47,26 @@ public class GlobalExceptionHandler {
                 .collect(Collectors.joining(", "));
         log.warn("参数校验失败: {}", errorMsg);
         return Result.fail(ResultCode.PARAM_ERROR.getCode(), errorMsg);
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public Result<Void> handleConstraintViolationException(ConstraintViolationException e) {
+        String errorMsg = e.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + " " + v.getMessage())
+                .collect(Collectors.joining(", "));
+        log.warn("参数约束失败: {}", errorMsg);
+        return Result.fail(ResultCode.PARAM_ERROR.getCode(), errorMsg);
+    }
+
+    @ExceptionHandler({
+            MissingServletRequestParameterException.class,
+            MethodArgumentTypeMismatchException.class,
+            HttpMessageNotReadableException.class,
+            HttpRequestMethodNotSupportedException.class
+    })
+    public Result<Void> handleBadRequestException(Exception e) {
+        log.warn("请求参数错误: {}", e.getMessage());
+        return Result.fail(ResultCode.BAD_REQUEST);
     }
 
     /**

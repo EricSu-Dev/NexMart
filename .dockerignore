@@ -1,0 +1,7 @@
+target
+.git
+.idea
+.claude
+*.log
+backend-dev.log
+backend-dev.err.log

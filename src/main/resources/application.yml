@@ -42,6 +42,7 @@ spring:
     publisher-returns: true
     listener:
       simple:
+        auto-startup: ${RABBITMQ_LISTENER_AUTO_STARTUP:true}
         concurrency: 5
         max-concurrency: 10
         acknowledge-mode: manual
@@ -102,13 +103,18 @@ alipay:
   app-id: ${ALIPAY_APP_ID:请在application-prod.yml中配置}
   private-key: ${ALIPAY_PRIVATE_KEY:请在application-prod.yml中配置}
   alipay-public-key: ${ALIPAY_PUBLIC_KEY:请在application-prod.yml中配置}
+  seller-id: ${ALIPAY_SELLER_ID:}
   gateway-url: https://openapi-sandbox.dl.alipaydev.com/gateway.do
   notify-url: ${ALIPAY_NOTIFY_URL:请在application-prod.yml中配置}
   return-url: https://nexmart.tech/api/user/payment/return
 
+app:
+  cors:
+    allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,https://nexmart.tech}
+
 logging:
   level:
-    com.nexmart: debug
-    org.springframework.security: debug
+    com.nex.nexmart: debug
+    org.springframework.security: info
   pattern:
-    console: "%d{HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    console: "%d{HH:mm:ss} [%thread] %-5level [%X{traceId:-}] %logger{36} - %msg%n"

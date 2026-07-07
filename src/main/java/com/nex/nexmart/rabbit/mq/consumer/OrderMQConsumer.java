@@ -1,153 +1,258 @@
 package com.nex.nexmart.rabbit.mq.consumer;
 
 import com.alibaba.fastjson.JSON;
-import com.nex.nexmart.rabbit.mq.message.SeckillCouponMessage;
-import com.nex.nexmart.rabbit.mq.message.SeckillProductOrderMessage;
 import com.nex.nexmart.common.constant.RabbitMQConstants;
 import com.nex.nexmart.common.constant.RedisSeckillConstants;
+import com.nex.nexmart.rabbit.mq.message.SeckillCouponMessage;
+import com.nex.nexmart.rabbit.mq.message.SeckillProductOrderMessage;
 import com.nex.nexmart.service.impl.order.OrderServiceImpl;
 import com.nex.nexmart.service.impl.seckill.SeckillOrderServiceImpl;
 import com.nex.nexmart.websocket.CsWebSocketSessionManager;
-import jakarta.annotation.PostConstruct;
+import com.rabbitmq.client.Channel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.core.RabbitAdmin;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
-import com.rabbitmq.client.Channel;
+
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Map;
-
-import org.springframework.messaging.handler.annotation.Header;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class OrderMQConsumer {
+
+	private static final int MAX_CONSUME_RETRY = 3;
+	private static final String FAILURE_REASON_HEADER = "x-failure-reason";
+
+	private static final DefaultRedisScript<Long> SECKILL_ROLLBACK_LUA_SCRIPT =
+			new DefaultRedisScript<>(RedisSeckillConstants.SECKILL_ROLLBACK_LUA, Long.class);
+
 	private final OrderServiceImpl orderService;
 	private final RedisTemplate<String, String> redisTemplate;
 	private final CsWebSocketSessionManager sessionManager;
 	private final SeckillOrderServiceImpl seckillOrderService;
-	private final RabbitAdmin rabbitAdmin;
-
-	private static final DefaultRedisScript<Long> SECKILL_ROLLBACK_LUA_SCRIPT =
-			new DefaultRedisScript<>(RedisSeckillConstants.SECKILL_ROLLBACK_LUA, Long.class);
-	@PostConstruct
-	public void testRabbit() {
-		rabbitAdmin.initialize();
-		System.out.println("RabbitAdmin initialized");
-	}
-
-	//Channel channel：用于和 RabbitMQ 进行交互（最重要的是用来确认消息）
-	//@Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag：每条消息在 Channel 中的唯一编号，必须用来做 ACK/NACK
+	private final RabbitTemplate rabbitTemplate;
 
 	@RabbitListener(queues = RabbitMQConstants.ORDER_DEAD_QUEUE)
 	public void handleOrderTimeout(Map<String, Object> msg, Channel channel,
-	                               @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+	                               @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+	                               @Header(name = RabbitMQConstants.MQ_RETRY_COUNT_HEADER, required = false) Integer retryCount)
+			throws IOException {
 		Long orderId = null;
 		try {
 			orderId = Long.valueOf(msg.get("orderId").toString());
-			log.info("[OrderTimeout] 收到超时取消消息 orderId={}", orderId);
+			log.info("[OrderTimeout] received timeout message orderId={} retryCount={}", orderId, retryCountOrZero(retryCount));
 			orderService.cancelOrderByTimeout(orderId);
-			channel.basicAck(deliveryTag, false);//告诉 RabbitMQ：这条消息我已经成功处理，可以从队列中删除了,false只确认当前这条消息
+			channel.basicAck(deliveryTag, false);
 		} catch (Exception e) {
-			log.error("[OrderTimeout] 处理失败 orderId={}", orderId, e);
-			channel.basicNack(deliveryTag, false, false);//处理失败,第二个false代表不不重新入队,防止死循环
+			log.error("[OrderTimeout] consume failed orderId={} retryCount={}", orderId, retryCountOrZero(retryCount), e);
+			try {
+				handleOrderTimeoutFailure(msg, retryCount, e);
+				channel.basicAck(deliveryTag, false);
+			} catch (Exception retryException) {
+				log.error("[OrderTimeout] retry dispatch failed, message will be requeued orderId={}", orderId, retryException);
+				channel.basicNack(deliveryTag, false, true);
+			}
 		}
 	}
 
 	@RabbitListener(queues = RabbitMQConstants.SECKILL_COUPON_ORDER_QUEUE)
 	public void handleSeckillCouponOrder(SeckillCouponMessage message, Channel channel,
-	                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+	                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+	                                     @Header(name = RabbitMQConstants.MQ_RETRY_COUNT_HEADER, required = false) Integer retryCount)
+			throws IOException {
 		Long userId = message.getUserId();
 		Long seckillItemId = message.getSeckillItemId();
-		log.info("[SeckillMQ] 收到秒杀券下单消息 userId={} seckillItemId={} messageId={}", userId, seckillItemId, message.getMessageId());
+		log.info("[SeckillMQ] received coupon order userId={} seckillItemId={} messageId={} retryCount={}",
+				userId, seckillItemId, message.getMessageId(), retryCountOrZero(retryCount));
 
-		// 幂等去重：同一消息只处理一次（防重复消费）
 		String dedupKey = RedisSeckillConstants.SECKILL_MSG_DEDUP + message.getMessageId();
 		Boolean firstTime = redisTemplate.opsForValue()
 				.setIfAbsent(dedupKey, "1", 1, java.util.concurrent.TimeUnit.DAYS);
 		if (!Boolean.TRUE.equals(firstTime)) {
-			log.warn("[SeckillMQ] 重复消息，跳过处理 userId={} seckillItemId={}", userId, seckillItemId);
+			log.warn("[SeckillMQ] duplicate coupon message skipped userId={} seckillItemId={} messageId={}",
+					userId, seckillItemId, message.getMessageId());
 			channel.basicAck(deliveryTag, false);
 			return;
 		}
 
 		try {
 			seckillOrderService.createCouponOrderAsync(userId, seckillItemId);
-			sessionManager.sendToUser(userId, JSON.toJSONString(Map.of(
-					"type", "SECKILL_RESULT",
-					"success", true,
-					"message", "抢券成功"
-			)));
+			sendSeckillResult(userId, true, "抢券成功");
 			channel.basicAck(deliveryTag, false);
 		} catch (Exception e) {
-			log.error("[SeckillMQ] 秒杀券下单失败 userId={} seckillItemId={}", userId, seckillItemId, e);
-			// 删除去重标记，允许重试
+			log.error("[SeckillMQ] coupon order failed userId={} seckillItemId={} messageId={}",
+					userId, seckillItemId, message.getMessageId(), e);
 			redisTemplate.delete(dedupKey);
-			// 回滚Redis（Lua保证原子性）
-			String stockKey = RedisSeckillConstants.SECKILL_COUPON_STOCK + seckillItemId;
-			String userKey = RedisSeckillConstants.SECKILL_COUPON_USERS + seckillItemId;
-			redisTemplate.execute(
-					SECKILL_ROLLBACK_LUA_SCRIPT,
-					Arrays.asList(stockKey, userKey),
-					String.valueOf(userId)
-			);
-			sessionManager.sendToUser(userId, JSON.toJSONString(Map.of(
-					"type", "SECKILL_RESULT",
-					"success", false,
-					"message", "抢券失败，请重试"
-			)));
-			channel.basicNack(deliveryTag, false, false);
+			try {
+				handleSeckillFailure(
+						message,
+						userId,
+						seckillItemId,
+						retryCount,
+						RabbitMQConstants.SECKILL_COUPON_ORDER_RETRY_ROUTING_KEY,
+						RabbitMQConstants.SECKILL_COUPON_ORDER_FAILED_ROUTING_KEY,
+						() -> rollbackSeckillStock(
+								RedisSeckillConstants.SECKILL_COUPON_STOCK + seckillItemId,
+								RedisSeckillConstants.SECKILL_COUPON_USERS + seckillItemId,
+								userId),
+						"抢券失败，请重试",
+						e);
+				channel.basicAck(deliveryTag, false);
+			} catch (Exception retryException) {
+				log.error("[SeckillMQ] coupon retry dispatch failed, message will be requeued userId={} seckillItemId={}",
+						userId, seckillItemId, retryException);
+				channel.basicNack(deliveryTag, false, true);
+			}
 		}
 	}
+
 	@RabbitListener(queues = RabbitMQConstants.SECKILL_PRODUCT_ORDER_QUEUE)
 	public void handleSeckillProductOrder(SeckillProductOrderMessage message, Channel channel,
-	                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+	                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+	                                      @Header(name = RabbitMQConstants.MQ_RETRY_COUNT_HEADER, required = false) Integer retryCount)
+			throws IOException {
 		Long userId = message.getUserId();
 		Long seckillItemId = message.getSeckillItemId();
-		log.info("[SeckillMQ] 收到秒杀商品下单消息 userId={} seckillItemId={} messageId={}", userId, seckillItemId, message.getMessageId());
+		log.info("[SeckillMQ] received product order userId={} seckillItemId={} messageId={} retryCount={}",
+				userId, seckillItemId, message.getMessageId(), retryCountOrZero(retryCount));
 
-		// 幂等去重：同一消息只处理一次（防重复消费）
 		String dedupKey = RedisSeckillConstants.SECKILL_MSG_DEDUP + message.getMessageId();
 		Boolean firstTime = redisTemplate.opsForValue()
 				.setIfAbsent(dedupKey, "1", 1, java.util.concurrent.TimeUnit.DAYS);
 		if (!Boolean.TRUE.equals(firstTime)) {
-			log.warn("[SeckillMQ] 重复消息，跳过处理 userId={} seckillItemId={}", userId, seckillItemId);
+			log.warn("[SeckillMQ] duplicate product message skipped userId={} seckillItemId={} messageId={}",
+					userId, seckillItemId, message.getMessageId());
 			channel.basicAck(deliveryTag, false);
 			return;
 		}
 
 		try {
 			seckillOrderService.createProductOrderAsync(message);
-			sessionManager.sendToUser(userId, JSON.toJSONString(Map.of(
-					"type", "SECKILL_RESULT",
-					"success", true,
-					"message", "抢购成功"
-			)));
+			sendSeckillResult(userId, true, "抢购成功");
 			channel.basicAck(deliveryTag, false);
 		} catch (Exception e) {
-			log.error("[SeckillMQ] 秒杀商品下单失败 userId={} seckillItemId={}", userId, seckillItemId, e);
-			// 删除去重标记，允许重试
+			log.error("[SeckillMQ] product order failed userId={} seckillItemId={} messageId={}",
+					userId, seckillItemId, message.getMessageId(), e);
 			redisTemplate.delete(dedupKey);
-			// 回滚Redis（Lua保证原子性）
-			String stockKey = RedisSeckillConstants.SECKILL_PRODUCT_STOCK + seckillItemId;
-			String userKey = RedisSeckillConstants.SECKILL_PRODUCT_USERS + seckillItemId;
-			redisTemplate.execute(
-					SECKILL_ROLLBACK_LUA_SCRIPT,
-					Arrays.asList(stockKey, userKey),
-					String.valueOf(userId)
-			);
-			sessionManager.sendToUser(userId, JSON.toJSONString(Map.of(
-					"type", "SECKILL_RESULT",
-					"success", false,
-					"message", "抢购失败，请重试"
-			)));
-			channel.basicNack(deliveryTag, false, false);
+			try {
+				handleSeckillFailure(
+						message,
+						userId,
+						seckillItemId,
+						retryCount,
+						RabbitMQConstants.SECKILL_PRODUCT_ORDER_RETRY_ROUTING_KEY,
+						RabbitMQConstants.SECKILL_PRODUCT_ORDER_FAILED_ROUTING_KEY,
+						() -> rollbackSeckillStock(
+								RedisSeckillConstants.SECKILL_PRODUCT_STOCK + seckillItemId,
+								RedisSeckillConstants.SECKILL_PRODUCT_USERS + seckillItemId,
+								userId),
+						"抢购失败，请重试",
+						e);
+				channel.basicAck(deliveryTag, false);
+			} catch (Exception retryException) {
+				log.error("[SeckillMQ] product retry dispatch failed, message will be requeued userId={} seckillItemId={}",
+						userId, seckillItemId, retryException);
+				channel.basicNack(deliveryTag, false, true);
+			}
 		}
+	}
+
+	private void handleOrderTimeoutFailure(Map<String, Object> msg, Integer retryCount, Exception cause) {
+		int currentRetry = retryCountOrZero(retryCount);
+		if (currentRetry < MAX_CONSUME_RETRY) {
+			int nextRetry = currentRetry + 1;
+			publishWithRetryHeader(
+					RabbitMQConstants.ORDER_TIMEOUT_RETRY_EXCHANGE,
+					RabbitMQConstants.ORDER_TIMEOUT_RETRY_ROUTING_KEY,
+					msg,
+					nextRetry,
+					cause);
+			log.warn("[OrderTimeout] sent to retry queue retryCount={} msg={}", nextRetry, msg);
+			return;
+		}
+
+		publishWithRetryHeader(
+				RabbitMQConstants.ORDER_TIMEOUT_FAILED_EXCHANGE,
+				RabbitMQConstants.ORDER_TIMEOUT_FAILED_ROUTING_KEY,
+				msg,
+				currentRetry,
+				cause);
+		log.error("[OrderTimeout] retry exhausted, sent to failed queue msg={}", msg);
+	}
+
+	private void handleSeckillFailure(Object message, Long userId, Long seckillItemId, Integer retryCount,
+	                                  String retryRoutingKey, String failedRoutingKey,
+	                                  Runnable rollbackAction, String userFailMessage, Exception cause) {
+		int currentRetry = retryCountOrZero(retryCount);
+		if (currentRetry < MAX_CONSUME_RETRY) {
+			int nextRetry = currentRetry + 1;
+			publishWithRetryHeader(
+					RabbitMQConstants.SECKILL_RETRY_EXCHANGE,
+					retryRoutingKey,
+					message,
+					nextRetry,
+					cause);
+			log.warn("[SeckillMQ] sent to retry queue userId={} seckillItemId={} retryCount={}",
+					userId, seckillItemId, nextRetry);
+			return;
+		}
+
+		try {
+			rollbackAction.run();
+		} catch (Exception rollbackException) {
+			log.error("[SeckillMQ] redis rollback failed userId={} seckillItemId={}", userId, seckillItemId, rollbackException);
+		}
+
+		publishWithRetryHeader(
+				RabbitMQConstants.SECKILL_FAILED_EXCHANGE,
+				failedRoutingKey,
+				message,
+				currentRetry,
+				cause);
+		sendSeckillResult(userId, false, userFailMessage);
+		log.error("[SeckillMQ] retry exhausted, sent to failed queue userId={} seckillItemId={}", userId, seckillItemId);
+	}
+
+	private void rollbackSeckillStock(String stockKey, String userKey, Long userId) {
+		redisTemplate.execute(
+				SECKILL_ROLLBACK_LUA_SCRIPT,
+				Arrays.asList(stockKey, userKey),
+				String.valueOf(userId));
+	}
+
+	private void sendSeckillResult(Long userId, boolean success, String message) {
+		sessionManager.sendToUser(userId, JSON.toJSONString(Map.of(
+				"type", "SECKILL_RESULT",
+				"success", success,
+				"message", message
+		)));
+	}
+
+	private void publishWithRetryHeader(String exchange, String routingKey, Object payload, int retryCount, Exception cause) {
+		rabbitTemplate.convertAndSend(exchange, routingKey, payload, message -> {
+			message.getMessageProperties().setHeader(RabbitMQConstants.MQ_RETRY_COUNT_HEADER, retryCount);
+			message.getMessageProperties().setHeader(FAILURE_REASON_HEADER, rootMessage(cause));
+			return message;
+		});
+	}
+
+	private int retryCountOrZero(Integer retryCount) {
+		return retryCount == null ? 0 : retryCount;
+	}
+
+	private String rootMessage(Exception cause) {
+		String message = cause.getMessage();
+		if (message == null || message.isBlank()) {
+			return cause.getClass().getSimpleName();
+		}
+		return message.length() > 200 ? message.substring(0, 200) : message;
 	}
 }

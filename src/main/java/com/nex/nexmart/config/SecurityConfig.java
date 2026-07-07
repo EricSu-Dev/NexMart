@@ -6,6 +6,7 @@ import com.nex.nexmart.common.Result;
 import com.nex.nexmart.common.ResultCode;
 import com.nex.nexmart.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
@@ -25,6 +26,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -35,6 +37,8 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final ObjectMapper objectMapper;
+	@Value("${app.cors.allowed-origin-patterns:http://localhost:5173,http://127.0.0.1:5173,https://nexmart.tech}")
+	private String allowedOriginPatterns;
 
     /**
      * 密码加密器（BCrypt）
@@ -76,6 +80,7 @@ public class SecurityConfig {
 				            "/swagger-ui/**",                  // Swagger UI
 				            "/v3/api-docs/**",                 // Swagger API 文档
 				            "/swagger-ui.html",                // Swagger UI HTML 页面
+				            "/api/health",                     // 健康检查
 				            "/api/user/product/**",            // 商品查询公开
 				            "/api/user/category/**",           // 分类查询公开
 				            "/api/ai/search-suggest",          // AI搜索功能
@@ -125,7 +130,10 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));   // 开发阶段放开，生产环境改为具体域名
+        config.setAllowedOriginPatterns(Arrays.stream(allowedOriginPatterns.split(","))
+				.map(String::trim)
+				.filter(s -> !s.isEmpty())
+				.toList());
 	    config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);

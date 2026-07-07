@@ -1,6 +1,7 @@
 package com.nex.nexmart.service.impl.common;
 
 import com.aliyun.oss.OSS;
+import com.aliyun.oss.model.ObjectMetadata;
 import com.nex.nexmart.config.properties.AliOssProperties;
 import com.nex.nexmart.exception.BusinessException;
 import com.nex.nexmart.service.intf.common.UploadService;
@@ -9,71 +10,140 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
-/**
- * 文件上传服务实现
- * 负责将图片/视频文件上传到阿里云 OSS，并返回可访问的文件 URL
- */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class UploadServiceImpl implements UploadService {
 
-	// 阿里云 OSS 客户端，用于执行实际的文件上传操作
-	private final OSS ossClient;
+	private static final long MAX_UPLOAD_SIZE = 10 * 1024 * 1024L;
+	private static final Map<String, String> ALLOWED_CONTENT_TYPES = Map.ofEntries(
+			Map.entry(".jpg", "image/jpeg"),
+			Map.entry(".jpeg", "image/jpeg"),
+			Map.entry(".png", "image/png"),
+			Map.entry(".gif", "image/gif"),
+			Map.entry(".webp", "image/webp"),
+			Map.entry(".mp4", "video/mp4"),
+			Map.entry(".webm", "video/webm")
+	);
 
-	// OSS 相关配置（bucket名称、访问域名等）
+	private final OSS ossClient;
 	private final AliOssProperties aliOssProperties;
 
-	/**
-	 * 上传图片或视频文件到 OSS
-	 *
-	 * @param file 前端传来的文件
-	 * @return 文件上传成功后的访问 URL
-	 */
 	@Override
 	public String uploadImage(MultipartFile file) {
+		validateBasicFileInfo(file);
 
-		// 1. 校验文件不能为空
-		if (file.isEmpty()) {
-			throw new BusinessException("文件不能为空");
+		String extension = getSafeExtension(file.getOriginalFilename());
+		String expectedContentType = ALLOWED_CONTENT_TYPES.get(extension);
+		if (expectedContentType == null) {
+			throw new BusinessException("仅支持 jpg、jpeg、png、gif、webp、mp4、webm 格式");
 		}
 
-		// 2. 校验文件类型，只允许图片或视频
-		String contentType = file.getContentType();
-		if (contentType == null || !(contentType.startsWith("image/") || contentType.startsWith("video/"))) {
-			throw new BusinessException("只允许上传图片/视频文件");
+		String actualContentType = normalizeContentType(file.getContentType());
+		if (!expectedContentType.equals(actualContentType)) {
+			throw new BusinessException("文件类型与后缀不匹配");
 		}
-
-		// 3. 提取原始文件的后缀名（如 .jpg .mp4），保留格式信息
-		String originalFilename = file.getOriginalFilename();
-		String extension = "";
-		if (originalFilename != null && originalFilename.contains(".")) {
-			//lastIndexOf("."):从字符串中找到最后一个 . 的下标位置并返回
-			//substring(index),包含index, 结果 → ".jpg"
-			extension = originalFilename.substring(originalFilename.lastIndexOf("."));
-		}
-
-		// 4. 用 UUID 生成唯一文件名，避免重名覆盖，统一存放在 media/ 目录下
-		// 例如：media/a1b2c3d4e5f6...jpg  UUID 是一种全球唯一的随机标识符，每次调用都会生成一个不同的值
-		//UUID.randomUUID():：550e8400-e29b-41d4-a716-446655440000
-		//.replace("-", ""),把字符串中所有的 - 替换为空字符串（即删除）,550e8400e29b41d4a716446655440000
-		String objectKey = "media/" + UUID.randomUUID().toString().replace("-", "") + extension;
 
 		try {
-			// 5. 将文件上传到 OSS 指定的 bucket 中
-			ossClient.putObject(aliOssProperties.getBucketName(), objectKey, file.getInputStream());
+			byte[] bytes = file.getBytes();
+			if (!matchesMagicNumber(bytes, extension)) {
+				throw new BusinessException("文件内容与类型不匹配");
+			}
 
-			// 6. 拼接完整访问 URL，例如：https://xxx.oss-cn-hangzhou.aliyuncs.com/media/xxx.jpg
+			String objectKey = "media/" + UUID.randomUUID().toString().replace("-", "") + extension;
+			ObjectMetadata metadata = new ObjectMetadata();
+			metadata.setContentLength(bytes.length);
+			metadata.setContentType(expectedContentType);
+
+			ossClient.putObject(
+					aliOssProperties.getBucketName(),
+					objectKey,
+					new ByteArrayInputStream(bytes),
+					metadata);
+
 			String fileUrl = aliOssProperties.getUrlPrefix() + objectKey;
-			log.info("OSS 文件上传成功: {}", fileUrl);
+			log.info("OSS file uploaded successfully: {}", fileUrl);
 			return fileUrl;
-
 		} catch (IOException e) {
-			log.error("OSS 文件上传失败", e);
+			log.error("OSS file upload failed", e);
 			throw new BusinessException("媒体上传失败，请稍后重试");
 		}
+	}
+
+	private void validateBasicFileInfo(MultipartFile file) {
+		if (file == null || file.isEmpty()) {
+			throw new BusinessException("文件不能为空");
+		}
+		if (file.getSize() > MAX_UPLOAD_SIZE) {
+			throw new BusinessException("文件大小不能超过 10MB");
+		}
+		if (file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()) {
+			throw new BusinessException("文件名不能为空");
+		}
+		if (file.getContentType() == null || file.getContentType().isBlank()) {
+			throw new BusinessException("文件类型不能为空");
+		}
+	}
+
+	private String getSafeExtension(String originalFilename) {
+		int dotIndex = originalFilename.lastIndexOf('.');
+		if (dotIndex < 0 || dotIndex == originalFilename.length() - 1) {
+			throw new BusinessException("文件后缀不能为空");
+		}
+		return originalFilename.substring(dotIndex).toLowerCase(Locale.ROOT);
+	}
+
+	private String normalizeContentType(String contentType) {
+		int semicolonIndex = contentType.indexOf(';');
+		String normalized = semicolonIndex >= 0 ? contentType.substring(0, semicolonIndex) : contentType;
+		return normalized.trim().toLowerCase(Locale.ROOT);
+	}
+
+	private boolean matchesMagicNumber(byte[] bytes, String extension) {
+		return switch (extension) {
+			case ".jpg", ".jpeg" -> startsWith(bytes, 0xFF, 0xD8, 0xFF);
+			case ".png" -> startsWith(bytes, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A);
+			case ".gif" -> startsWithAscii(bytes, "GIF87a") || startsWithAscii(bytes, "GIF89a");
+			case ".webp" -> bytes.length >= 12
+					&& startsWithAscii(bytes, "RIFF")
+					&& asciiEquals(bytes, 8, "WEBP");
+			case ".mp4" -> bytes.length >= 12 && asciiEquals(bytes, 4, "ftyp");
+			case ".webm" -> startsWith(bytes, 0x1A, 0x45, 0xDF, 0xA3);
+			default -> false;
+		};
+	}
+
+	private boolean startsWith(byte[] bytes, int... expected) {
+		if (bytes.length < expected.length) {
+			return false;
+		}
+		for (int i = 0; i < expected.length; i++) {
+			if ((bytes[i] & 0xFF) != expected[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private boolean startsWithAscii(byte[] bytes, String expected) {
+		return asciiEquals(bytes, 0, expected);
+	}
+
+	private boolean asciiEquals(byte[] bytes, int offset, String expected) {
+		if (bytes.length < offset + expected.length()) {
+			return false;
+		}
+		for (int i = 0; i < expected.length(); i++) {
+			if (bytes[offset + i] != (byte) expected.charAt(i)) {
+				return false;
+			}
+		}
+		return true;
 	}
 }

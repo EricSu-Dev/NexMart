@@ -1,6 +1,7 @@
 package com.nex.nexmart.common;
 
 import lombok.Data;
+import org.slf4j.MDC;
 
 @Data
 public class Result<T> {
@@ -8,11 +9,13 @@ public class Result<T> {
     private int code;
     private String msg;
     private T data;
+    private String traceId;
 
     private Result(int code, String msg, T data) {
         this.code = code;
         this.msg = msg;
         this.data = data;
+        this.traceId = MDC.get("traceId");
     }
 
     // -------- 成功 --------

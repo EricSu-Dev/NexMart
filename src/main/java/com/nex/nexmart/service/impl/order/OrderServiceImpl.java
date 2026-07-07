@@ -148,6 +148,10 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 		previewDTO.setProductCouponMap(productCouponMap);
 		OrderPreviewVO previewVO = preview(userId, previewDTO);
 		Map<Long, BigDecimal> productCouponDiscountMap = previewVO.getProductCouponDiscountMap();
+		if (dto.getOrderUserCouponId() != null && !Boolean.TRUE.equals(previewVO.getOrderCouponUsable())) {
+			throw new BusinessException(Optional.ofNullable(previewVO.getOrderCouponUsableReason())
+					.orElse("订单优惠券不可用"));
+		}
 
 		// 组装订单项
 		List<OrderItem> orderItems = new ArrayList<>();
@@ -208,24 +212,48 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 		//把order存入数据库后把orderId回填到item里面
 		orderItems.forEach(item -> item.setOrderId(order.getId()));
 
-		// 核销订单券
-		if (orderCouponUser != null) {
-			orderCouponUser.setStatus(1);
-			orderCouponUser.setUsedAt(LocalDateTime.now());
-			orderCouponUser.setOrderId(order.getId());
-			couponUserService.updateById(orderCouponUser);
+		LocalDateTime now = LocalDateTime.now();
+		// 核销订单券：必须属于当前用户、未使用、未过期且类型正确
+		if (dto.getOrderUserCouponId() != null) {
+			boolean updated = couponUserService.lambdaUpdate()
+					.eq(CouponUser::getId, dto.getOrderUserCouponId())
+					.eq(CouponUser::getUserId, userId)
+					.eq(CouponUser::getStatus, 0)
+					.eq(CouponUser::getCouponType, 2)
+					.gt(CouponUser::getExpireAt, now)
+					.set(CouponUser::getStatus, 1)
+					.set(CouponUser::getUsedAt, now)
+					.set(CouponUser::getOrderId, order.getId())
+					.update();
+			if (!updated) {
+				throw new BusinessException("订单优惠券不可用或已被使用");
+			}
 		}
 
 		// 核销商品券
-		// 核销商品券：直接用 couponUserMap，不再循环查库
-		if (dto.getProductCouponMap() != null) {
-			for (Long userCouponId : dto.getProductCouponMap().values()) {
-				CouponUser cu = couponUserMap.get(userCouponId);
-				if (cu != null) {
-					cu.setStatus(1);
-					cu.setUsedAt(LocalDateTime.now());
-					cu.setOrderId(order.getId());
-					couponUserService.updateById(cu);
+		if (dto.getProductCouponMap() != null && !dto.getProductCouponMap().isEmpty()) {
+			Set<Long> usedProductCouponIds = new HashSet<>();
+			for (Map.Entry<Long, Long> entry : dto.getProductCouponMap().entrySet()) {
+				Long cartItemId = entry.getKey();
+				Long userCouponId = entry.getValue();
+				if (!productCouponDiscountMap.containsKey(cartItemId)) {
+					throw new BusinessException("商品优惠券不可用");
+				}
+				if (!usedProductCouponIds.add(userCouponId)) {
+					throw new BusinessException("同一张商品优惠券不能重复使用");
+				}
+				boolean updated = couponUserService.lambdaUpdate()
+						.eq(CouponUser::getId, userCouponId)
+						.eq(CouponUser::getUserId, userId)
+						.eq(CouponUser::getStatus, 0)
+						.eq(CouponUser::getCouponType, 1)
+						.gt(CouponUser::getExpireAt, now)
+						.set(CouponUser::getStatus, 1)
+						.set(CouponUser::getUsedAt, now)
+						.set(CouponUser::getOrderId, order.getId())
+						.update();
+				if (!updated) {
+					throw new BusinessException("商品优惠券不可用或已被使用");
 				}
 			}
 		}
@@ -569,8 +597,13 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 		if (order == null) {
 			throw new BusinessException("订单不存在");
 		}
+		if (!Objects.equals(order.getStatus(), OrderStatusConstants.PENDING_DELIVERY)
+				|| !Objects.equals(status, OrderStatusConstants.PENDING_RECEIPT)) {
+			throw new BusinessException("当前仅允许将待发货订单更新为待收货");
+		}
 		lambdaUpdate()
 				.eq(Order::getId, id)
+				.eq(Order::getStatus, OrderStatusConstants.PENDING_DELIVERY)
 				.set(Order::getStatus, status)
 				.update();
 	}

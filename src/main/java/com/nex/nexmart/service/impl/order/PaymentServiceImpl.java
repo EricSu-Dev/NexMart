@@ -37,7 +37,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -159,6 +161,9 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 	    String tradeStatus = params.get("trade_status");
 	    String outTradeNo  = params.get("out_trade_no");
 	    String tradeNo     = params.get("trade_no");
+		String appId       = params.get("app_id");
+		String sellerId    = params.get("seller_id");
+		String totalAmount = params.get("total_amount");
 
 	    log.info("支付宝通知 outTradeNo={} tradeNo={} tradeStatus={}", outTradeNo, tradeNo, tradeStatus);
 
@@ -190,6 +195,9 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 		    log.warn("找不到对应的支付记录 orderId={}", order.getId());
 		    return "failure";
 	    }
+		if (!verifyNotifyBusinessParams(appId, sellerId, totalAmount, outTradeNo, payment)) {
+			return "failure";
+		}
 
 		// 6. 幂等：支付宝可能会多次发送同一个通知,已经处理过就直接返回成功
 	    if (payment.getStatus() == 1) {
@@ -197,15 +205,7 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 		    return "success";
 	    }
 
-        // 7. 更新支付记录
-        lambdaUpdate()
-                .eq(Payment::getId, payment.getId())
-                .set(Payment::getStatus, 1)
-                .set(Payment::getPayNo, tradeNo)
-                .set(Payment::getPayTime, LocalDateTime.now())
-                .update();
-
-        // 8. 更新订单状态：待付款(1) → 待发货(2)，同时标记已支付（乐观锁防止并发取消覆盖）
+        // 7. 更新订单状态：待付款(1) → 待发货(2)，同时标记已支付（乐观锁防止并发取消覆盖）
 		int rows = orderMapper.update(new LambdaUpdateWrapper<Order>()
 				.eq(Order::getOrderNo, orderNo)
 				.eq(Order::getStatus, OrderStatusConstants.PENDING_PAYMENT)
@@ -222,6 +222,15 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 			)));
 			return "success";
 		}
+
+		// 8. 订单状态更新成功后再更新支付记录，避免本地 payment/order 状态不一致
+		lambdaUpdate()
+				.eq(Payment::getId, payment.getId())
+				.eq(Payment::getStatus, 0)
+				.set(Payment::getStatus, 1)
+				.set(Payment::getPayNo, tradeNo)
+				.set(Payment::getPayTime, LocalDateTime.now())
+				.update();
         log.info("订单支付成功处理完成 orderNo={}",orderNo);
 	    // 9.支付回调成功时,通知商家
 	    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -234,6 +243,34 @@ public class PaymentServiceImpl extends ServiceImpl<PaymentMapper, Payment> impl
 	    sessionManager.broadcast(message);
         return "success";
     }
+
+	private boolean verifyNotifyBusinessParams(String appId, String sellerId, String totalAmount,
+	                                           String outTradeNo, Payment payment) {
+		if (!alipayProperties.getAppId().equals(appId)) {
+			log.warn("支付宝回调 app_id 不匹配 appId={}", appId);
+			return false;
+		}
+		if (StringUtils.hasText(alipayProperties.getSellerId())
+				&& !alipayProperties.getSellerId().equals(sellerId)) {
+			log.warn("支付宝回调 seller_id 不匹配 sellerId={}", sellerId);
+			return false;
+		}
+		if (!payment.getOrderNo().equals(outTradeNo)) {
+			log.warn("支付宝回调 outTradeNo 不匹配 notifyOutTradeNo={} localOutTradeNo={}",
+					outTradeNo, payment.getOrderNo());
+			return false;
+		}
+		try {
+			if (new BigDecimal(totalAmount).compareTo(payment.getAmount()) != 0) {
+				log.warn("支付宝回调金额不匹配 notifyAmount={} localAmount={}", totalAmount, payment.getAmount());
+				return false;
+			}
+		} catch (Exception e) {
+			log.warn("支付宝回调金额格式异常 totalAmount={}", totalAmount);
+			return false;
+		}
+		return true;
+	}
 
 	@Override
 	@Transactional
