@@ -6,6 +6,8 @@ import com.nex.nexmart.mapper.base.AiMessageMapper;
 import com.nex.nexmart.mapper.base.AiSessionMapper;
 import com.nex.nexmart.model.entity.ai.AiMessage;
 import com.nex.nexmart.model.entity.ai.AiSession;
+import com.nex.nexmart.service.ai.intent.AiIntentHandler;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.SystemMessage;
 import reactor.core.publisher.Flux;
@@ -36,11 +38,12 @@ public class AiChatService {
 	private final ChatClient chatClient;
 	private final StringRedisTemplate stringRedisTemplate;
 	private final ObjectMapper objectMapper;
-	private final AiContextService aiContextService;
 	private final AiKnowledgeService aiKnowledgeService;
 	private final AiSessionMapper aiSessionMapper;
 	private final AiMessageMapper aiMessageMapper;
 	private final ThreadPoolExecutor nexmartExecutor;
+	private final List<AiIntentHandler> aiIntentHandlers;
+	private Map<String, AiIntentHandler> intentHandlerMap = Map.of();
 
 	public static final String AI_CHAT_HISTORY_Prefix = "NexMart:ai:history:";
 	public static final long AI_CHAT_TTL = 60; // 分钟
@@ -56,6 +59,12 @@ public class AiChatService {
 			- 无法解决的问题，引导用户点击导航栏"客服中心"联系人工客服。
 			- 不要透露你是DeepSeek，你只是"Nex"。
 			""";
+
+	@PostConstruct
+	private void initIntentHandlers() {
+		intentHandlerMap = aiIntentHandlers.stream()
+				.collect(Collectors.toUnmodifiableMap(AiIntentHandler::intent, handler -> handler));
+	}
 
 	public Flux<String> chat(Long userId, String message) {
 		String key = AI_CHAT_HISTORY_Prefix + userId;
@@ -189,15 +198,8 @@ public class AiChatService {
 		if (intent == null || intent.getIntent() == null) {
 			return "";
 		}
-		return switch (intent.getIntent()) {
-			case "query_product" -> aiContextService.queryProduct(intent.getKeyword());
-			case "query_seckill" -> aiContextService.querySeckill();
-			case "query_order" -> aiContextService.queryOrder(userId);
-			case "query_coupon" -> aiContextService.queryCoupon(userId);
-			case "query_points" -> aiContextService.queryPoints(userId);
-			case "query_promotion" -> aiContextService.queryPromotion();
-			default -> "";
-		};
+		AiIntentHandler handler = intentHandlerMap.get(intent.getIntent());
+		return handler == null ? "" : handler.handle(intent, userId);
 	}
 
 	private String buildReferenceContext(String businessContext, String knowledgeContext) {

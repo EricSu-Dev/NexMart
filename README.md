@@ -66,7 +66,7 @@ String 缓存首页商品/轮播图/分类数据、秒杀活动数据、秒杀�
 
 **⑥ Spring AI + DeepSeek 流式 AI 客服与 RAG 知识增强**
 
-集成 Spring AI（OpenAI-compatible 接口）接入 DeepSeek，支持意图识别、动态查询数据库、SSE 流式输出；订单、优惠券、积分、商品库存等实时业务数据通过后端确定性查询，商城规则、购物流程、退款售后、优惠券与秒杀说明通过 RAG 知识召回注入上下文；多轮上下文存储于 Redis，历史记录持久化至 MySQL，搜索无结果时自动降级为 AI 智能推荐。
+集成 Spring AI（OpenAI-compatible 接口）接入 DeepSeek，支持意图识别、策略模式路由业务查询、SSE 流式输出；订单、优惠券、积分、商品库存等实时业务数据通过后端确定性查询，商城规则、购物流程、退款售后、优惠券与秒杀说明通过 RAG 知识召回注入上下文；多轮上下文存储于 Redis，历史记录持久化至 MySQL，搜索无结果时自动降级为 AI 智能推荐。
 
 ---
 
@@ -94,7 +94,7 @@ Real-time chat between users and support agents via Spring WebSocket, supporting
 
 **⑥ Spring AI + DeepSeek Streaming AI Assistant & RAG Knowledge Enhancement**
 
-Integrated Spring AI (OpenAI-compatible) with DeepSeek for intent recognition, dynamic DB queries, and SSE streaming output. Real-time business data such as orders, coupons, points, and inventory is queried deterministically by backend services, while store rules, shopping flow, refund policies, coupon rules, and flash-sale instructions are retrieved through a RAG-style knowledge layer and injected into the prompt. Multi-turn context is stored in Redis, history is persisted in MySQL, and search falls back to AI-powered recommendations when no exact results are found.
+Integrated Spring AI (OpenAI-compatible) with DeepSeek for intent recognition, strategy-based business query routing, and SSE streaming output. Real-time business data such as orders, coupons, points, and inventory is queried deterministically by backend services, while store rules, shopping flow, refund policies, coupon rules, and flash-sale instructions are retrieved through a RAG-style knowledge layer and injected into the prompt. Multi-turn context is stored in Redis, history is persisted in MySQL, and search falls back to AI-powered recommendations when no exact results are found.
 
 ## 📦 功能模块 | Features
 
